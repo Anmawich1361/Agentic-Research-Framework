@@ -1,0 +1,53 @@
+lenses:
+  general:
+    description: "General understanding of a company, industry, or market."
+    priorities:
+      - clear overview
+      - definitions
+      - major players
+      - recent developments
+  sales:
+    description: "Prepare for a sales, vendor, or partnership meeting."
+    priorities:
+      - company priorities
+      - buyer pain points
+      - recent initiatives
+      - likely stakeholders
+      - questions to ask
+  investment:
+    description: "Investment-oriented research."
+    priorities:
+      - business model
+      - market structure
+      - financial profile
+      - competitive advantage
+      - risks
+      - valuation context when available
+  interview:
+    description: "Prepare for job interview or recruiting conversation."
+    priorities:
+      - company history
+      - products
+      - strategy
+      - leadership
+      - culture signals
+      - recent news
+  strategy:
+    description: "Consulting or strategic analysis."
+    priorities:
+      - value chain
+      - industry structure
+      - profit pools
+      - competitors
+      - trends
+      - strategic options
+  diligence:
+    description: "M&A, private equity, or deep diligence."
+    priorities:
+      - ownership
+      - revenue model
+      - customers
+      - margins
+      - risks
+      - market attractiveness
+      - deal questions

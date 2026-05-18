@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchCharter",
+  "type": "object",
+  "required": [
+    "target",
+    "target_type",
+    "research_lens",
+    "depth",
+    "deliverable",
+    "key_questions"
+  ],
+  "properties": {
+    "target": {
+      "type": "string"
+    },
+    "target_type": {
+      "type": "string",
+      "enum": [
+        "company",
+        "industry",
+        "market",
+        "competitor_set",
+        "person",
+        "other"
+      ]
+    },
+    "research_lens": {
+      "type": "string",
+      "enum": [
+        "general",
+        "sales",
+        "investment",
+        "interview",
+        "strategy",
+        "diligence"
+      ]
+    },
+    "depth": {
+      "type": "string",
+      "enum": [
+        "brief",
+        "standard",
+        "deep_dive"
+      ]
+    },
+    "geography": {
+      "type": "string"
+    },
+    "time_horizon": {
+      "type": "string"
+    },
+    "deliverable": {
+      "type": "string"
+    },
+    "key_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "known_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing_context": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

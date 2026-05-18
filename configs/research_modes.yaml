@@ -1,0 +1,39 @@
+modes:
+  brief:
+    description: "Short, practical brief for quick preparation."
+    target_length: "1-2 pages"
+    default_sections:
+      - executive_summary
+      - what_matters
+      - key_sources
+      - risks
+      - questions_to_ask
+  standard:
+    description: "Balanced company or industry research report."
+    target_length: "5-10 pages"
+    default_sections:
+      - executive_summary
+      - overview
+      - industry_context
+      - competitors
+      - financial_or_operating_profile
+      - recent_developments
+      - risks
+      - open_questions
+      - source_appendix
+  deep_dive:
+    description: "Detailed diligence-style research."
+    target_length: "10+ pages"
+    default_sections:
+      - executive_summary
+      - research_scope
+      - business_model
+      - industry_structure
+      - market_size_and_growth
+      - competitors
+      - financial_profile
+      - unit_economics
+      - risks
+      - management_questions
+      - source_appendix
+      - evidence_summary

@@ -1,0 +1,17 @@
+quality_gates:
+  checkpoint:
+    require_research_charter: true
+    require_source_map: true
+    require_user_questions: true
+  full_report:
+    require_evidence_ledger: true
+    require_source_appendix: true
+    require_risks_section: true
+    require_open_questions_section: true
+    require_executive_summary: true
+  qa:
+    block_final_if_high_severity: true
+    warn_if_no_primary_sources: true
+    warn_if_sources_stale: true
+    warn_if_competitors_missing: true
+    warn_if_financials_missing_for_public_company: true

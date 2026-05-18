@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceScore",
+  "type": "object",
+  "required": [
+    "source_id",
+    "authority_score",
+    "relevance_score",
+    "recency_score",
+    "coverage_score",
+    "bias_risk",
+    "final_score"
+  ],
+  "properties": {
+    "source_id": {
+      "type": "string"
+    },
+    "authority_score": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "relevance_score": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "recency_score": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "coverage_score": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "bias_risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "final_score": {
+      "type": "number"
+    },
+    "include": {
+      "type": "boolean"
+    },
+    "rationale": {
+      "type": "string"
+    }
+  }
+}

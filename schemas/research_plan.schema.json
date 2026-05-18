@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchPlan",
+  "type": "object",
+  "required": [
+    "research_questions",
+    "report_sections",
+    "required_source_types",
+    "checkpoint_questions"
+  ],
+  "properties": {
+    "research_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "report_sections": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_source_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "likely_specialists": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checkpoint_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "known_risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "data_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+[project]
+name = "agentic-research-framework"
+version = "0.1.0"
+description = "CLI-first agentic company and industry research framework"
+requires-python = ">=3.11"
+dependencies = [
+    "openai",
+    "openai-agents",
+    "typer",
+    "pydantic",
+    "python-dotenv",
+    "pyyaml",
+    "rich",
+    "httpx",
+    "beautifulsoup4",
+    "markdown",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+arf = "agentic_research.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

@@ -1,0 +1,49 @@
+source_types:
+  corporate_filing:
+    authority_default: 5
+    bias_risk_default: low
+    examples: ["10-K", "10-Q", "S-1", "proxy", "annual report"]
+  government_data:
+    authority_default: 5
+    bias_risk_default: low
+    examples: ["SEC", "BLS", "Census", "FRED", "World Bank"]
+  earnings_transcript:
+    authority_default: 4
+    bias_risk_default: medium
+    examples: ["earnings call transcript", "quarterly call"]
+  investor_material:
+    authority_default: 4
+    bias_risk_default: medium
+    examples: ["investor presentation", "investor day", "shareholder letter"]
+  primary_company:
+    authority_default: 4
+    bias_risk_default: high
+    examples: ["company website", "product page", "press release"]
+  industry_primer:
+    authority_default: 4
+    bias_risk_default: medium
+    examples: ["industry association report", "consulting report", "market primer"]
+  competitor_source:
+    authority_default: 3
+    bias_risk_default: high
+    examples: ["competitor website", "competitor case study"]
+  trade_publication:
+    authority_default: 3
+    bias_risk_default: medium
+    examples: ["trade news", "industry publication"]
+  news:
+    authority_default: 3
+    bias_risk_default: medium
+    examples: ["Reuters", "Financial Times", "Wall Street Journal", "Bloomberg"]
+  whitepaper:
+    authority_default: 2
+    bias_risk_default: high
+    examples: ["vendor whitepaper", "technical report"]
+  expert_blog:
+    authority_default: 2
+    bias_risk_default: medium
+    examples: ["analyst blog", "newsletter", "independent expert"]
+  unknown:
+    authority_default: 1
+    bias_risk_default: medium
+    examples: []

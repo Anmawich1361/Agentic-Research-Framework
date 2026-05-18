@@ -1,0 +1,16 @@
+workflow:
+  default_sequence:
+    - intake
+    - planning
+    - source_discovery
+    - source_scoring
+    - checkpoint
+    - evidence_extraction
+    - synthesis
+    - qa
+    - final_report
+  checkpoint_required_before_full_research: true
+  allow_full_without_interactive_approval: true
+  artifact_dir: runs
+  default_mode: standard
+  default_lens: general

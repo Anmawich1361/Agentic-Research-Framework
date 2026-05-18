@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceCandidate",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "source_type",
+    "bias_risk",
+    "recommended_uses"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "publisher": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "source_type": {
+      "type": "string"
+    },
+    "publication_date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "relevance_rationale": {
+      "type": "string"
+    },
+    "recommended_uses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bias_risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

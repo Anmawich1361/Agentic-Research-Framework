@@ -1,0 +1,23 @@
+weights:
+  authority: 0.35
+  relevance: 0.30
+  recency: 0.15
+  coverage: 0.10
+  bias_adjustment: 0.10
+
+bias_adjustments:
+  low: 0
+  medium: -0.5
+  high: -1.0
+
+recency_rules:
+  current_year: 5
+  previous_year: 4
+  two_to_three_years_old: 3
+  four_to_five_years_old: 2
+  older_or_unknown: 1
+
+minimums:
+  include_by_default_final_score: 3.0
+  high_confidence_authority_floor: 4
+  source_map_top_n: 12

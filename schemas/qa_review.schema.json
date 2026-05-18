@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QAReview",
+  "type": "object",
+  "required": [
+    "ready_to_publish",
+    "issues"
+  ],
+  "properties": {
+    "ready_to_publish": {
+      "type": "boolean"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "problem": {
+            "type": "string"
+          },
+          "suggested_fix": {
+            "type": "string"
+          },
+          "affected_section": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "string"
+    }
+  }
+}
