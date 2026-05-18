@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -216,7 +217,7 @@ def _extract_mock_evidence(
             )
         )
     ledger = EvidenceLedger(EvidenceExtractionResult(claims=claims).claims)
-    ledger.validate(source_scores=score_lookup)
+    ledger.validate(source_scores=score_lookup, source_map=source_map)
     return ledger.to_model()
 
 
@@ -226,7 +227,7 @@ def _validate_evidence(
     source_map: SourceMap,
 ) -> EvidenceLedgerModel:
     ledger = EvidenceLedger(claims)
-    ledger.validate(source_scores=_source_scores_by_id(source_map))
+    ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
     return ledger.to_model()
 
 
@@ -237,11 +238,6 @@ def _validate_specialist_analysis_sources(
 ) -> None:
     allowed_source_ids = {source.id for source in source_map.sources}
     referenced_source_ids = set(analysis.source_ids)
-    referenced_source_ids.update(
-        claim.source_id
-        for claim in analysis.evidence_claims
-        if claim.source_id is not None
-    )
     unknown = sorted(
         source_id for source_id in referenced_source_ids if source_id not in allowed_source_ids
     )
@@ -258,6 +254,7 @@ def _run_specialist_analyses(
     charter: ResearchCharter,
     plan: ResearchPlan,
     source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
     selected_specialists: list[str],
     agent_runner: AgentRunner | None,
 ) -> list[SpecialistAnalysis]:
@@ -270,11 +267,13 @@ def _run_specialist_analyses(
             "charter": charter.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
             "source_map": source_map.model_dump(mode="json"),
+            "evidence_ledger": evidence_ledger.model_dump(mode="json"),
             "instructions": [
                 "Return a SpecialistAnalysis object only.",
+                "Use the evidence_ledger as the factual base for specialist analysis.",
                 "Use only source_map source IDs for source_ids and evidence claims.",
-                "Do not include specialist facts that cannot be tied to source IDs.",
-                "Every material specialist fact should become an evidence_claim when possible.",
+                "Do not bypass the evidence ledger with unsupported specialist facts.",
+                "Every material specialist fact should become an evidence_claim.",
             ],
             "output_schema": "SpecialistAnalysis",
         }
@@ -311,19 +310,41 @@ def _merge_specialist_claims(
     )
 
 
-def _validate_report_source_ids(
+_BRACKET_REFERENCE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]*)\]")
+_SOURCE_ID_REFERENCE_RE = re.compile(r"\b(src_[A-Za-z0-9_-]+)\b")
+
+
+def _markdown_claim_references(markdown: str, known_claim_ids: set[str]) -> set[str]:
+    references = set(_BRACKET_REFERENCE_RE.findall(markdown))
+    return {
+        reference
+        for reference in references
+        if reference in known_claim_ids or reference.startswith("claim_")
+    }
+
+
+def _markdown_source_references(markdown: str) -> set[str]:
+    return set(_SOURCE_ID_REFERENCE_RE.findall(markdown))
+
+
+def _validate_report_traceability(
     report: Report,
     *,
     evidence_ledger: EvidenceLedgerModel,
     source_map: SourceMap,
 ) -> None:
+    allowed_claim_ids = {claim.id for claim in evidence_ledger.claims}
+    markdown_claim_ids = _markdown_claim_references(report.markdown, allowed_claim_ids)
+    report.claim_ids = sorted(set(report.claim_ids).union(markdown_claim_ids))
+    unknown_claim_ids = sorted(claim_id for claim_id in report.claim_ids if claim_id not in allowed_claim_ids)
+    if unknown_claim_ids:
+        raise ValueError(
+            f"Report contains unknown evidence claim references: {', '.join(unknown_claim_ids)}"
+        )
+
     allowed_source_ids = {source.id for source in source_map.sources}
-    allowed_source_ids.update(
-        claim.source_id
-        for claim in evidence_ledger.claims
-        if claim.source_id is not None
-    )
-    unknown = sorted(source_id for source_id in report.source_ids if source_id not in allowed_source_ids)
+    report_source_ids = set(report.source_ids).union(_markdown_source_references(report.markdown))
+    unknown = sorted(source_id for source_id in report_source_ids if source_id not in allowed_source_ids)
     if unknown:
         raise ValueError(f"Report contains unknown source references: {', '.join(unknown)}")
 
@@ -361,7 +382,7 @@ def _create_mock_report(
         source_map=source_map,
         evidence_ledger=evidence_ledger,
     )
-    _validate_report_source_ids(report, evidence_ledger=evidence_ledger, source_map=source_map)
+    _validate_report_traceability(report, evidence_ledger=evidence_ledger, source_map=source_map)
     _validate_report_sections(report)
     return report
 
@@ -445,6 +466,12 @@ def run_research(
             if full
             else None
         )
+        if evidence_ledger is not None and mock_specialist_analyses:
+            evidence_ledger = _merge_specialist_claims(
+                evidence_ledger,
+                mock_specialist_analyses,
+                source_map=source_map,
+            )
         report = (
             _create_mock_report(
                 charter=charter,
@@ -465,6 +492,7 @@ def run_research(
             else None
         )
         has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
+        write_final_report = report is not None and qa and not has_blocking_qa
         return _write_checkpoint_artifacts(
             run_id=run_id,
             run_dir=run_dir,
@@ -479,14 +507,16 @@ def run_research(
             evidence_ledger=evidence_ledger,
             report=report,
             qa_review=qa_review,
-            write_final_report=not has_blocking_qa,
+            write_final_report=write_final_report,
             status=(
                 "needs_review"
                 if has_blocking_qa
+                else "report_ready"
+                if report is not None and qa
+                else "draft_needs_qa"
+                if report is not None
                 else "evidence_needs_review"
                 if evidence_ledger is not None and evidence_ledger.validation_warnings
-                else "report_ready"
-                if report is not None
                 else "evidence_ready"
                 if evidence_ledger is not None
                 else "checkpoint_ready"
@@ -562,14 +592,6 @@ def run_research(
     status = "checkpoint_ready"
     if full:
         selected_specialists = select_specialists(charter, plan)
-        specialist_analyses = _run_specialist_analyses(
-            agents=agents,
-            charter=charter,
-            plan=plan,
-            source_map=source_map,
-            selected_specialists=selected_specialists,
-            agent_runner=agent_runner,
-        )
         approved_sources = _approved_sources(source_map)
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
@@ -599,6 +621,17 @@ def run_research(
             ),
         )
         evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+        status = "evidence_needs_review" if evidence_ledger.validation_warnings else "evidence_ready"
+        if not evidence_ledger.validation_warnings:
+            specialist_analyses = _run_specialist_analyses(
+                agents=agents,
+                charter=charter,
+                plan=plan,
+                source_map=source_map,
+                evidence_ledger=evidence_ledger,
+                selected_specialists=selected_specialists,
+                agent_runner=agent_runner,
+            )
         evidence_ledger = _merge_specialist_claims(
             evidence_ledger,
             specialist_analyses,
@@ -629,9 +662,13 @@ def run_research(
                     "Source Appendix",
                 ],
                 "source_reference_rule": (
-                    "Use only source references from the evidence ledger or source map. "
-                    "Specialist analysis can guide structure, but final report facts must "
-                    "be backed by evidence ledger claims or source map references."
+                    "Use only source IDs from source_map. Include Source IDs and URLs "
+                    "in the Source Appendix."
+                ),
+                "claim_reference_rule": (
+                    "Every material factual report statement must cite an evidence "
+                    "ledger claim ID in [claim_id] form. Populate claim_ids with every "
+                    "claim ID cited in markdown."
                 ),
                 "output_schema": "Report",
             }
@@ -644,7 +681,7 @@ def run_research(
                     agent_runner=agent_runner,
                 ),
             )
-            _validate_report_source_ids(
+            _validate_report_traceability(
                 report,
                 evidence_ledger=evidence_ledger,
                 source_map=source_map,
@@ -662,9 +699,10 @@ def run_research(
                 )
                 status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
             else:
-                status = "report_ready"
+                status = "draft_needs_qa"
 
     has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
+    write_final_report = report is not None and qa and not has_blocking_qa
 
     return _write_checkpoint_artifacts(
         run_id=run_id,
@@ -680,6 +718,6 @@ def run_research(
         evidence_ledger=evidence_ledger,
         report=report,
         qa_review=qa_review,
-        write_final_report=not has_blocking_qa,
+        write_final_report=write_final_report,
         status=status,
     )

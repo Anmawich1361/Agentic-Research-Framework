@@ -67,7 +67,8 @@ def test_render_source_appendix_uses_source_map_rows() -> None:
 
     assert "# Source Appendix" in appendix
     assert "ServiceTitan company overview" in appendix
-    assert "src_servicetitan_primary" not in appendix
+    assert "src_servicetitan_primary" in appendix
+    assert "https://www.servicetitan.com/company" in appendix
     assert "4.2" in appendix
 
 
@@ -106,3 +107,4 @@ def test_render_mock_report_includes_required_phase_5_sections() -> None:
     assert "## Open Questions" in report.markdown
     assert "## Source Appendix" in report.markdown
     assert report.source_ids == ["src_servicetitan_primary"]
+    assert report.claim_ids == ["claim_1"]

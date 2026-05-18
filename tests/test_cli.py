@@ -1,3 +1,7 @@
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -5,6 +9,36 @@ from typer.testing import CliRunner
 from agentic_research import cli
 from agentic_research.models import QAReview, ResearchCharter, ResearchPlan, RunMetadata, SourceMap
 from agentic_research.orchestrator import run_research
+
+
+def test_pyproject_declares_src_layout_for_editable_install() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert config["build-system"]["build-backend"] == "setuptools.build_meta"
+    assert "setuptools>=69" in config["build-system"]["requires"]
+    assert "wheel" in config["build-system"]["requires"]
+    assert config["tool"]["setuptools"]["package-dir"] == {"": "src"}
+    assert config["tool"]["setuptools"]["packages"]["find"]["where"] == ["src"]
+    assert config["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "agentic_research*"
+    ]
+
+
+def test_console_script_entrypoint_is_installed_for_editable_environment() -> None:
+    arf_script = Path(sys.executable).with_name("arf")
+
+    assert arf_script.exists()
+
+    result = subprocess.run(
+        [str(arf_script), "--help"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Agentic Research Framework CLI" in result.stdout
 
 
 def test_cli_run_subcommand_invokes_mock_checkpoint(tmp_path, monkeypatch) -> None:

@@ -1,8 +1,51 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
-from agentic_research.models import EvidenceClaim, EvidenceLedger as EvidenceLedgerModel, SourceScore
+from agentic_research.models import (
+    EvidenceClaim,
+    EvidenceLedger as EvidenceLedgerModel,
+    SourceCandidate,
+    SourceMap,
+    SourceScore,
+)
+
+
+def _normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    stripped = url.strip()
+    parsed = urlsplit(stripped)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path.rstrip("/")
+        return urlunsplit(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                path,
+                parsed.query,
+                "",
+            )
+        )
+    return stripped.rstrip("/").lower()
+
+
+def _source_scores_from_map(source_map: SourceMap | None) -> dict[str, SourceScore]:
+    if source_map is None:
+        return {}
+    return {score.source_id: score for score in source_map.scores}
+
+
+def _sources_by_url(source_map: SourceMap | None) -> dict[str, SourceCandidate]:
+    if source_map is None:
+        return {}
+    sources: dict[str, SourceCandidate] = {}
+    for source in source_map.sources:
+        normalized = _normalize_url(source.url)
+        if normalized is not None:
+            sources[normalized] = source
+    return sources
 
 
 class EvidenceLedger:
@@ -19,20 +62,61 @@ class EvidenceLedger:
     def validate(
         self,
         source_scores: Mapping[str, SourceScore] | None = None,
+        source_map: SourceMap | None = None,
         high_confidence_authority_floor: float = 4,
     ) -> list[str]:
         warnings: list[str] = []
-        scores = source_scores or {}
+        scores: dict[str, SourceScore] = _source_scores_from_map(source_map)
+        if source_scores is not None:
+            scores.update(source_scores)
+        sources_by_id = (
+            {source.id: source for source in source_map.sources}
+            if source_map is not None
+            else {}
+        )
+        sources_by_normalized_url = _sources_by_url(source_map)
 
         for claim in self.claims:
             if claim.claim_type == "fact" and not (claim.source_id or claim.source_url):
                 warnings.append(f"{claim.id}: fact claim must include a source id or URL.")
 
-            score = scores.get(claim.source_id or "")
-            if (
-                claim.confidence == "high"
-                and score is not None
-                and score.authority_score < high_confidence_authority_floor
+            known_source: SourceCandidate | None = None
+            score: SourceScore | None = None
+            if claim.source_id:
+                known_source = sources_by_id.get(claim.source_id)
+                if source_map is not None and known_source is None:
+                    warnings.append(
+                        f"{claim.id}: unknown source id {claim.source_id} is not in the source map."
+                    )
+                score = scores.get(claim.source_id)
+
+            normalized_claim_url = _normalize_url(claim.source_url)
+            if normalized_claim_url and known_source is None:
+                known_source = sources_by_normalized_url.get(normalized_claim_url)
+                if known_source is not None and score is None:
+                    score = scores.get(known_source.id)
+
+            if claim.source_id and claim.source_url and known_source is not None:
+                normalized_source_url = _normalize_url(known_source.url)
+                if normalized_claim_url != normalized_source_url:
+                    warnings.append(
+                        f"{claim.id}: source_url {claim.source_url} does not match source map "
+                        f"URL for {claim.source_id} ({known_source.url})."
+                    )
+
+            if claim.claim_type == "fact" and claim.confidence == "high":
+                if source_map is not None and known_source is None:
+                    warnings.append(
+                        f"{claim.id}: high-confidence fact claim must use a known source."
+                    )
+                elif known_source is not None and score is None:
+                    warnings.append(
+                        f"{claim.id}: high-confidence fact claim uses known source "
+                        f"{known_source.id} without an authority score."
+                    )
+
+            if claim.confidence == "high" and score is not None and (
+                score.authority_score < high_confidence_authority_floor
             ):
                 warnings.append(
                     f"{claim.id}: high-confidence claim uses low-authority source "

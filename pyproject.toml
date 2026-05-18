@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agentic-research-framework"
 version = "0.1.0"
@@ -26,6 +30,13 @@ dev = [
 
 [project.scripts]
 arf = "agentic_research.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["agentic_research*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

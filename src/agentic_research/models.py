@@ -143,6 +143,7 @@ class Report(StrictModel):
     title: str
     markdown: str
     source_ids: list[str]
+    claim_ids: list[str] = Field(default_factory=list)
     status: str = "draft"
 
 

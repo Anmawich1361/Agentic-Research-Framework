@@ -56,11 +56,18 @@ def run_deterministic_qa_checks(
 
     ledger = EvidenceLedger(evidence_ledger.claims)
     evidence_warnings = ledger.validate(
-        source_scores={score.source_id: score for score in source_map.scores}
+        source_map=source_map,
     )
     for warning in evidence_warnings:
         severity: Severity = (
-            "high" if "source id or URL" in warning or "low-authority" in warning else "medium"
+            "high"
+            if (
+                "source id or URL" in warning
+                or "unknown source id" in warning
+                or "low-authority" in warning
+                or "source map URL" in warning
+            )
+            else "medium"
         )
         issues.append(
             QAIssue(

@@ -227,7 +227,9 @@ def test_live_checkpoint_includes_mocked_search_results_in_source_agent_prompt(
     assert source_map["scores"][0]["source_id"] in {"src_costco_primary", "src_costco_news"}
 
 
-def test_full_run_generates_report_from_mocked_synthesis_output(tmp_path: Path) -> None:
+def test_full_run_without_qa_writes_draft_only_from_mocked_synthesis_output(
+    tmp_path: Path,
+) -> None:
     calls: list[str] = []
     synthesis_prompt = ""
 
@@ -330,13 +332,13 @@ def test_full_run_generates_report_from_mocked_synthesis_output(tmp_path: Path) 
         "intake",
         "planner",
         "source_discovery",
+        "evidence_extraction",
         "news",
         "competitor",
         "risk",
-        "evidence_extraction",
         "synthesis",
     ]
-    assert result.metadata.status == "report_ready"
+    assert result.metadata.status == "draft_needs_qa"
     assert result.evidence_ledger is not None
     assert result.report is not None
     assert [analysis.specialist for analysis in result.specialist_analyses] == [
@@ -350,17 +352,16 @@ def test_full_run_generates_report_from_mocked_synthesis_output(tmp_path: Path) 
     run_dir = tmp_path / result.metadata.run_id
     evidence_ledger = json.loads((run_dir / "evidence_ledger.json").read_text())
     draft_report = (run_dir / "draft_report.md").read_text()
-    final_report = (run_dir / "report.md").read_text()
     assert evidence_ledger["claims"][0]["id"] == "claim_servicetitan_overview"
     assert evidence_ledger["validation_warnings"] == []
-    assert draft_report == final_report
-    assert "## Executive Summary" in final_report
-    assert "## Key Findings" in final_report
-    assert "## Business Overview" in final_report
-    assert "## Competitors" in final_report
-    assert "## Risks" in final_report
-    assert "## Open Questions" in final_report
-    assert "## Source Appendix" in final_report
+    assert not (run_dir / "report.md").exists()
+    assert "## Executive Summary" in draft_report
+    assert "## Key Findings" in draft_report
+    assert "## Business Overview" in draft_report
+    assert "## Competitors" in draft_report
+    assert "## Risks" in draft_report
+    assert "## Open Questions" in draft_report
+    assert "## Source Appendix" in draft_report
 
 
 def test_full_run_rejects_report_with_unknown_source_reference(tmp_path: Path) -> None:
@@ -450,6 +451,286 @@ def test_full_run_rejects_report_with_unknown_source_reference(tmp_path: Path) -
         assert "unknown source references" in str(exc)
     else:
         raise AssertionError("Expected unknown source references to fail report generation")
+
+
+def test_full_run_rejects_report_with_unknown_claim_reference(tmp_path: Path) -> None:
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="ServiceTitan",
+                target_type="company",
+                research_lens="sales",
+                depth="standard",
+                deliverable="meeting_prep_brief",
+                key_questions=["What should we understand before the sales meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What does ServiceTitan do?"],
+                report_sections=["overview", "sales_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which buyer persona matters most?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_servicetitan_primary",
+                        title="ServiceTitan company overview",
+                        publisher="ServiceTitan",
+                        url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        publication_date="2026-02-01",
+                        relevance_rationale="Primary source for company description.",
+                        recommended_uses=["overview"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_servicetitan_overview",
+                        claim="ServiceTitan provides software for trades businesses.",
+                        claim_type="fact",
+                        source_id="src_servicetitan_primary",
+                        source_title="ServiceTitan company overview",
+                        source_url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_servicetitan_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Bad Report",
+                markdown=(
+                    "# Bad Report\n\n"
+                    "## Executive Summary\nSummary.\n\n"
+                    "## Key Findings\n"
+                    "- Unsupported finding. [claim_not_in_ledger]\n\n"
+                    "## Business Overview\nOverview.\n\n"
+                    "## Competitors\nCompetitors.\n\n"
+                    "## Risks\nRisks.\n\n"
+                    "## Open Questions\nQuestions.\n\n"
+                    "## Source Appendix\n- ServiceTitan company overview "
+                    "(src_servicetitan_primary)\n"
+                ),
+                source_ids=["src_servicetitan_primary"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    try:
+        run_research(
+            "Research ServiceTitan before a sales meeting",
+            checkpoint_only=False,
+            full=True,
+            mock=False,
+            runs_dir=tmp_path,
+            agent_runner=fake_agent_runner,
+            search_client=WebSearchClient(provider=StaticSearchProvider({})),
+        )
+    except ValueError as exc:
+        assert "unknown evidence claim references" in str(exc)
+    else:
+        raise AssertionError("Expected unknown evidence claim references to fail report generation")
+
+
+def test_full_run_rejects_markdown_source_reference_not_in_source_map(tmp_path: Path) -> None:
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="ServiceTitan",
+                target_type="company",
+                research_lens="sales",
+                depth="standard",
+                deliverable="meeting_prep_brief",
+                key_questions=["What should we understand before the sales meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What does ServiceTitan do?"],
+                report_sections=["overview", "sales_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which buyer persona matters most?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_servicetitan_primary",
+                        title="ServiceTitan company overview",
+                        publisher="ServiceTitan",
+                        url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        publication_date="2026-02-01",
+                        relevance_rationale="Primary source for company description.",
+                        recommended_uses=["overview"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_servicetitan_overview",
+                        claim="ServiceTitan provides software for trades businesses.",
+                        claim_type="fact",
+                        source_id="src_servicetitan_primary",
+                        source_title="ServiceTitan company overview",
+                        source_url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_servicetitan_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Bad Report",
+                markdown=(
+                    "# Bad Report\n\n"
+                    "## Executive Summary\nSummary. [claim_servicetitan_overview]\n\n"
+                    "## Key Findings\nFinding.\n\n"
+                    "## Business Overview\nOverview.\n\n"
+                    "## Competitors\nCompetitors.\n\n"
+                    "## Risks\nRisks.\n\n"
+                    "## Open Questions\nQuestions.\n\n"
+                    "## Source Appendix\n- Unknown source (src_not_in_source_map)\n"
+                ),
+                source_ids=["src_servicetitan_primary"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    try:
+        run_research(
+            "Research ServiceTitan before a sales meeting",
+            checkpoint_only=False,
+            full=True,
+            mock=False,
+            runs_dir=tmp_path,
+            agent_runner=fake_agent_runner,
+            search_client=WebSearchClient(provider=StaticSearchProvider({})),
+        )
+    except ValueError as exc:
+        assert "unknown source references" in str(exc)
+    else:
+        raise AssertionError("Expected unknown markdown source references to fail report generation")
+
+
+def test_specialist_claim_with_unknown_source_blocks_publication(tmp_path: Path) -> None:
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="ServiceTitan",
+                target_type="company",
+                research_lens="sales",
+                depth="standard",
+                deliverable="meeting_prep_brief",
+                key_questions=["What should we understand before the sales meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What does ServiceTitan do?"],
+                report_sections=["overview", "sales_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which buyer persona matters most?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_servicetitan_primary",
+                        title="ServiceTitan company overview",
+                        publisher="ServiceTitan",
+                        url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        publication_date="2026-02-01",
+                        relevance_rationale="Primary source for company description.",
+                        recommended_uses=["overview"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_servicetitan_overview",
+                        claim="ServiceTitan provides software for trades businesses.",
+                        claim_type="fact",
+                        source_id="src_servicetitan_primary",
+                        source_title="ServiceTitan company overview",
+                        source_url="https://www.servicetitan.com/company",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key == "news":
+            assert "evidence_ledger" in prompt
+            return SpecialistAnalysis(
+                specialist="news",
+                summary="Specialist claim should be validated through the ledger.",
+                evidence_claims=[
+                    EvidenceClaim(
+                        id="claim_specialist_unknown_source",
+                        claim="ServiceTitan had a recent unsupported development.",
+                        claim_type="fact",
+                        source_id="src_not_in_source_map",
+                        source_url="https://example.com/unknown",
+                        confidence="medium",
+                        report_section="recent_developments",
+                    )
+                ],
+                source_ids=["src_servicetitan_primary"],
+            )
+        if agent_key in {"competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_servicetitan_primary"],
+            )
+        if agent_key == "synthesis":
+            raise AssertionError("Synthesis should not run with invalid specialist evidence.")
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research ServiceTitan before a sales meeting",
+        checkpoint_only=False,
+        full=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    assert result.metadata.status == "evidence_needs_review"
+    assert result.evidence_ledger is not None
+    assert any(
+        "claim_specialist_unknown_source" in warning and "unknown source id" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert not (run_dir / "draft_report.md").exists()
+    assert not (run_dir / "report.md").exists()
 
 
 def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path: Path) -> None:
@@ -578,12 +859,12 @@ def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path
         "intake",
         "planner",
         "source_discovery",
+        "evidence_extraction",
         "financial",
         "industry",
         "competitor",
         "risk",
         "filings",
-        "evidence_extraction",
         "synthesis",
         "qa",
     ]

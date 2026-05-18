@@ -20,6 +20,12 @@
         "type": "string"
       }
     },
+    "claim_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "status": {
       "type": "string"
     }

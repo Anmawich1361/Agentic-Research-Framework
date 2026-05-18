@@ -78,6 +78,10 @@ def _format_source_map(source_map: SourceMap) -> str:
     return "\n".join(lines)
 
 
+def _table_cell(value: str | None) -> str:
+    return (value or "").replace("|", "\\|")
+
+
 def render_checkpoint(
     charter: ResearchCharter,
     plan: ResearchPlan,
@@ -130,9 +134,11 @@ def render_source_appendix(source_map: SourceMap) -> str:
         score_text = str(score.final_score) if score is not None else ""
         rows.append(
             "| "
-            f"{source.title} | {source.publisher} | {source.source_type} | "
-            f"{source.publication_date or ''} | {score_text} | {source.bias_risk} | "
-            f"{', '.join(source.recommended_uses)} |"
+            f"{_table_cell(source.id)} | {_table_cell(source.title)} | "
+            f"{_table_cell(source.publisher)} | {_table_cell(source.url)} | "
+            f"{_table_cell(source.source_type)} | {_table_cell(source.publication_date)} | "
+            f"{score_text} | {_table_cell(source.bias_risk)} | "
+            f"{_table_cell(', '.join(source.recommended_uses))} |"
         )
     return render_markdown_template(template, {"rows": "\n".join(rows)})
 
@@ -187,6 +193,7 @@ def render_mock_report(
         title=f"{charter.target} Research Report",
         markdown=markdown,
         source_ids=source_ids,
+        claim_ids=[claim.id for claim in evidence_ledger.claims],
         status="draft",
     )
 
