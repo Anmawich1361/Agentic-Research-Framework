@@ -8,6 +8,7 @@ from agentic_research.models import (
     SourceScore,
 )
 from agentic_research.report_writer import (
+    render_checkpoint,
     render_mock_report,
     render_source_appendix,
     select_report_template_name,
@@ -70,6 +71,40 @@ def test_render_source_appendix_uses_source_map_rows() -> None:
     assert "src_servicetitan_primary" in appendix
     assert "https://www.servicetitan.com/company" in appendix
     assert "4.2" in appendix
+
+
+def test_render_checkpoint_uses_live_mode_wording_without_mock_claims() -> None:
+    checkpoint = render_checkpoint(
+        _charter("meeting_prep_brief", "sales"),
+        ResearchPlan(
+            research_questions=["What matters before the supplier meeting?"],
+            report_sections=["overview"],
+            required_source_types=["primary_company"],
+            checkpoint_questions=["Which supplier category matters?"],
+        ),
+        _source_map(),
+        mock=False,
+    )
+
+    assert "Live checkpoint source map" in checkpoint
+    assert "Mock mode produced" not in checkpoint
+    assert "No live research" not in checkpoint
+
+
+def test_render_checkpoint_preserves_mock_mode_wording() -> None:
+    checkpoint = render_checkpoint(
+        _charter("company_brief"),
+        ResearchPlan(
+            research_questions=["What matters?"],
+            report_sections=["overview"],
+            required_source_types=["primary_company"],
+            checkpoint_questions=["Which buyer persona matters?"],
+        ),
+        _source_map(),
+        mock=True,
+    )
+
+    assert "Mock mode produced a deterministic source map" in checkpoint
 
 
 def test_render_mock_report_includes_required_phase_5_sections() -> None:
