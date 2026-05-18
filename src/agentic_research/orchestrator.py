@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agentic_research.agents import (
     coerce_agent_output,
@@ -17,22 +17,42 @@ from agentic_research.agents import (
     get_agent_output_type,
     run_agent_sync,
 )
-from agentic_research.evidence_ledger import EvidenceLedger
+from agentic_research.evidence_ledger import EvidenceLedger, raise_if_report_has_unsupported_claims
 from agentic_research.models import (
     Confidence,
     EvidenceClaim,
     EvidenceExtractionResult,
     EvidenceLedger as EvidenceLedgerModel,
+    QAReview,
     ResearchCharter,
     ResearchPlan,
+    Report,
     RunMetadata,
     SourceCandidate,
     SourceDiscoveryResult,
     SourceMap,
+    SpecialistAnalysis,
 )
-from agentic_research.report_writer import write_checkpoint, write_json_artifact
+from agentic_research.report_writer import (
+    load_template,
+    render_mock_report,
+    select_report_template_name,
+    write_checkpoint,
+    write_json_artifact,
+    write_report_artifacts,
+)
+from agentic_research.qa import (
+    has_high_severity_issues,
+    merge_qa_reviews,
+    run_deterministic_qa_checks,
+)
 from agentic_research.settings import get_artifact_dir
 from agentic_research.source_scoring import build_source_map
+from agentic_research.specialists import (
+    build_mock_specialist_analyses,
+    runnable_specialist_agent_keys,
+    select_specialists,
+)
 from agentic_research.tools.web_search import WebSearchClient, build_source_search_queries
 
 
@@ -44,7 +64,12 @@ class ResearchRunResult(BaseModel):
     research_plan: ResearchPlan
     sources: list[SourceCandidate]
     source_map: SourceMap
+    specialist_analyses: list[SpecialistAnalysis] = Field(default_factory=list)
     evidence_ledger: EvidenceLedgerModel | None = None
+    report: Report | None = None
+    draft_report_path: Path | None = None
+    report_path: Path | None = None
+    qa_review: QAReview | None = None
 
 
 AgentRunner = Callable[[str, Any, str], Any]
@@ -90,7 +115,11 @@ def _write_checkpoint_artifacts(
     plan: ResearchPlan,
     sources: list[SourceCandidate],
     source_map: SourceMap,
+    specialist_analyses: list[SpecialistAnalysis] | None = None,
     evidence_ledger: EvidenceLedgerModel | None = None,
+    report: Report | None = None,
+    qa_review: QAReview | None = None,
+    write_final_report: bool = True,
     status: str = "checkpoint_ready",
 ) -> ResearchRunResult:
     metadata = RunMetadata(
@@ -108,8 +137,20 @@ def _write_checkpoint_artifacts(
     write_json_artifact(run_dir / "research_plan.json", plan)
     write_json_artifact(run_dir / "sources.json", sources)
     write_json_artifact(run_dir / "source_map.json", source_map)
+    if specialist_analyses:
+        write_json_artifact(run_dir / "specialist_analyses.json", specialist_analyses)
     if evidence_ledger is not None:
         write_json_artifact(run_dir / "evidence_ledger.json", evidence_ledger)
+    draft_report_path = None
+    report_path = None
+    if report is not None:
+        draft_report_path, report_path = write_report_artifacts(
+            run_dir,
+            report,
+            write_final=write_final_report,
+        )
+    if qa_review is not None:
+        write_json_artifact(run_dir / "qa_review.json", qa_review)
     checkpoint_path = write_checkpoint(run_dir, charter, plan, source_map)
 
     return ResearchRunResult(
@@ -120,7 +161,12 @@ def _write_checkpoint_artifacts(
         research_plan=plan,
         sources=sources,
         source_map=source_map,
+        specialist_analyses=specialist_analyses or [],
         evidence_ledger=evidence_ledger,
+        report=report,
+        draft_report_path=draft_report_path,
+        report_path=report_path,
+        qa_review=qa_review,
     )
 
 
@@ -184,6 +230,180 @@ def _validate_evidence(
     return ledger.to_model()
 
 
+def _validate_specialist_analysis_sources(
+    analysis: SpecialistAnalysis,
+    *,
+    source_map: SourceMap,
+) -> None:
+    allowed_source_ids = {source.id for source in source_map.sources}
+    referenced_source_ids = set(analysis.source_ids)
+    referenced_source_ids.update(
+        claim.source_id
+        for claim in analysis.evidence_claims
+        if claim.source_id is not None
+    )
+    unknown = sorted(
+        source_id for source_id in referenced_source_ids if source_id not in allowed_source_ids
+    )
+    if unknown:
+        raise ValueError(
+            f"Specialist analysis {analysis.specialist} contains unknown source references: "
+            f"{', '.join(unknown)}"
+        )
+
+
+def _run_specialist_analyses(
+    *,
+    agents: Any,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    selected_specialists: list[str],
+    agent_runner: AgentRunner | None,
+) -> list[SpecialistAnalysis]:
+    analyses: list[SpecialistAnalysis] = []
+    for specialist_key in runnable_specialist_agent_keys(selected_specialists):
+        agent = getattr(agents, specialist_key)
+        payload = {
+            "specialist": specialist_key,
+            "selected_specialists": selected_specialists,
+            "charter": charter.model_dump(mode="json"),
+            "research_plan": plan.model_dump(mode="json"),
+            "source_map": source_map.model_dump(mode="json"),
+            "instructions": [
+                "Return a SpecialistAnalysis object only.",
+                "Use only source_map source IDs for source_ids and evidence claims.",
+                "Do not include specialist facts that cannot be tied to source IDs.",
+                "Every material specialist fact should become an evidence_claim when possible.",
+            ],
+            "output_schema": "SpecialistAnalysis",
+        }
+        analysis = cast(
+            SpecialistAnalysis,
+            _run_live_agent(
+                specialist_key,
+                agent,
+                _json_prompt(f"Run {specialist_key} specialist analysis.", payload),
+                agent_runner=agent_runner,
+            ),
+        )
+        _validate_specialist_analysis_sources(analysis, source_map=source_map)
+        analyses.append(analysis)
+    return analyses
+
+
+def _merge_specialist_claims(
+    evidence_ledger: EvidenceLedgerModel,
+    specialist_analyses: list[SpecialistAnalysis],
+    *,
+    source_map: SourceMap,
+) -> EvidenceLedgerModel:
+    specialist_claims = [
+        claim
+        for analysis in specialist_analyses
+        for claim in analysis.evidence_claims
+    ]
+    if not specialist_claims:
+        return evidence_ledger
+    return _validate_evidence(
+        [*evidence_ledger.claims, *specialist_claims],
+        source_map=source_map,
+    )
+
+
+def _validate_report_source_ids(
+    report: Report,
+    *,
+    evidence_ledger: EvidenceLedgerModel,
+    source_map: SourceMap,
+) -> None:
+    allowed_source_ids = {source.id for source in source_map.sources}
+    allowed_source_ids.update(
+        claim.source_id
+        for claim in evidence_ledger.claims
+        if claim.source_id is not None
+    )
+    unknown = sorted(source_id for source_id in report.source_ids if source_id not in allowed_source_ids)
+    if unknown:
+        raise ValueError(f"Report contains unknown source references: {', '.join(unknown)}")
+
+
+def _validate_report_sections(report: Report) -> None:
+    markdown = report.markdown.lower()
+    required_terms = [
+        "executive summary",
+        "key findings",
+        "competitors",
+        "risks",
+        "open questions",
+        "source appendix",
+    ]
+    missing = [term for term in required_terms if term not in markdown]
+    if "business overview" not in markdown and "industry overview" not in markdown:
+        missing.append("business or industry overview")
+    if missing:
+        raise ValueError(f"Report is missing required sections: {', '.join(missing)}")
+
+
+def _create_mock_report(
+    *,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+) -> Report:
+    ledger = EvidenceLedger(evidence_ledger.claims)
+    ledger.validation_warnings = list(evidence_ledger.validation_warnings)
+    raise_if_report_has_unsupported_claims(ledger)
+    report = render_mock_report(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+    )
+    _validate_report_source_ids(report, evidence_ledger=evidence_ledger, source_map=source_map)
+    _validate_report_sections(report)
+    return report
+
+
+def _run_qa_review(
+    *,
+    agents: Any,
+    charter: ResearchCharter,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+    report: Report,
+    agent_runner: AgentRunner | None,
+) -> QAReview:
+    deterministic_review = run_deterministic_qa_checks(
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        draft_report=report,
+    )
+    qa_payload = {
+        "research_charter": charter.model_dump(mode="json"),
+        "source_map": source_map.model_dump(mode="json"),
+        "evidence_ledger": evidence_ledger.model_dump(mode="json"),
+        "draft_report": report.model_dump(mode="json"),
+        "instructions": [
+            "Review the draft report for reliability, source quality, and usefulness.",
+            "Do not rewrite the report.",
+            "High-severity issues should block final publication.",
+        ],
+        "output_schema": "QAReview",
+    }
+    agent_review = cast(
+        QAReview,
+        _run_live_agent(
+            "qa",
+            agents.qa,
+            _json_prompt("Run QA and red-team review on this draft report.", qa_payload),
+            agent_runner=agent_runner,
+        ),
+    )
+    return merge_qa_reviews(deterministic_review, agent_review)
+
+
 def run_research(
     request: str,
     *,
@@ -199,8 +419,8 @@ def run_research(
     search_client: WebSearchClient | None = None,
 ) -> ResearchRunResult:
     """Run the checkpoint workflow and write local artifacts."""
-    if qa:
-        raise NotImplementedError("Phase 4 does not implement QA runs yet.")
+    if qa and not full:
+        raise NotImplementedError("Use --full with --qa.")
     if not checkpoint_only and not full:
         raise NotImplementedError("Use --checkpoint-only or --full.")
 
@@ -211,11 +431,40 @@ def run_research(
         plan = create_mock_plan(charter)
         sources = discover_mock_sources(charter)
         source_map = build_source_map(sources, required_source_types=plan.required_source_types)
+        selected_specialists = select_specialists(charter, plan)
+        mock_specialist_analyses = (
+            build_mock_specialist_analyses(
+                runnable_specialist_agent_keys(selected_specialists),
+                source_map,
+            )
+            if full
+            else []
+        )
         evidence_ledger = (
             _extract_mock_evidence(charter=charter, plan=plan, source_map=source_map)
             if full
             else None
         )
+        report = (
+            _create_mock_report(
+                charter=charter,
+                plan=plan,
+                source_map=source_map,
+                evidence_ledger=evidence_ledger,
+            )
+            if evidence_ledger is not None and not evidence_ledger.validation_warnings
+            else None
+        )
+        qa_review = (
+            run_deterministic_qa_checks(
+                source_map=source_map,
+                evidence_ledger=evidence_ledger,
+                draft_report=report,
+            )
+            if qa and evidence_ledger is not None and report is not None
+            else None
+        )
+        has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
         return _write_checkpoint_artifacts(
             run_id=run_id,
             run_dir=run_dir,
@@ -226,10 +475,18 @@ def run_research(
             plan=plan,
             sources=sources,
             source_map=source_map,
+            specialist_analyses=mock_specialist_analyses,
             evidence_ledger=evidence_ledger,
+            report=report,
+            qa_review=qa_review,
+            write_final_report=not has_blocking_qa,
             status=(
-                "evidence_needs_review"
+                "needs_review"
+                if has_blocking_qa
+                else "evidence_needs_review"
                 if evidence_ledger is not None and evidence_ledger.validation_warnings
+                else "report_ready"
+                if report is not None
                 else "evidence_ready"
                 if evidence_ledger is not None
                 else "checkpoint_ready"
@@ -299,8 +556,20 @@ def run_research(
         source_map.gaps.extend(source_discovery.gaps)
 
     evidence_ledger = None
+    report = None
+    qa_review = None
+    specialist_analyses: list[SpecialistAnalysis] = []
     status = "checkpoint_ready"
     if full:
+        selected_specialists = select_specialists(charter, plan)
+        specialist_analyses = _run_specialist_analyses(
+            agents=agents,
+            charter=charter,
+            plan=plan,
+            source_map=source_map,
+            selected_specialists=selected_specialists,
+            agent_runner=agent_runner,
+        )
         approved_sources = _approved_sources(source_map)
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
@@ -330,7 +599,72 @@ def run_research(
             ),
         )
         evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+        evidence_ledger = _merge_specialist_claims(
+            evidence_ledger,
+            specialist_analyses,
+            source_map=source_map,
+        )
         status = "evidence_needs_review" if evidence_ledger.validation_warnings else "evidence_ready"
+        if not evidence_ledger.validation_warnings:
+            template_name = select_report_template_name(charter)
+            synthesis_payload = {
+                "charter": charter.model_dump(mode="json"),
+                "research_plan": plan.model_dump(mode="json"),
+                "source_map": source_map.model_dump(mode="json"),
+                "evidence_ledger": evidence_ledger.model_dump(mode="json"),
+                "specialist_analyses": [
+                    analysis.model_dump(mode="json") for analysis in specialist_analyses
+                ],
+                "selected_report_template": {
+                    "name": template_name,
+                    "markdown": load_template(template_name),
+                },
+                "required_sections": [
+                    "Executive Summary",
+                    "Key Findings",
+                    "Business or Industry Overview",
+                    "Competitors when relevant",
+                    "Risks",
+                    "Open Questions",
+                    "Source Appendix",
+                ],
+                "source_reference_rule": (
+                    "Use only source references from the evidence ledger or source map. "
+                    "Specialist analysis can guide structure, but final report facts must "
+                    "be backed by evidence ledger claims or source map references."
+                ),
+                "output_schema": "Report",
+            }
+            report = cast(
+                Report,
+                _run_live_agent(
+                    "synthesis",
+                    agents.synthesis,
+                    _json_prompt("Generate a cited markdown report.", synthesis_payload),
+                    agent_runner=agent_runner,
+                ),
+            )
+            _validate_report_source_ids(
+                report,
+                evidence_ledger=evidence_ledger,
+                source_map=source_map,
+            )
+            if not qa:
+                _validate_report_sections(report)
+            if qa:
+                qa_review = _run_qa_review(
+                    agents=agents,
+                    charter=charter,
+                    source_map=source_map,
+                    evidence_ledger=evidence_ledger,
+                    report=report,
+                    agent_runner=agent_runner,
+                )
+                status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
+            else:
+                status = "report_ready"
+
+    has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
 
     return _write_checkpoint_artifacts(
         run_id=run_id,
@@ -342,6 +676,10 @@ def run_research(
         plan=plan,
         sources=sources,
         source_map=source_map,
+        specialist_analyses=specialist_analyses,
         evidence_ledger=evidence_ledger,
+        report=report,
+        qa_review=qa_review,
+        write_final_report=not has_blocking_qa,
         status=status,
     )

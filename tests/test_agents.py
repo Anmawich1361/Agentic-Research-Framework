@@ -10,6 +10,7 @@ from agentic_research.models import (
     ResearchPlan,
     Report,
     SourceDiscoveryResult,
+    SpecialistAnalysis,
 )
 from agentic_research.tools.web_search import StaticSearchProvider, WebSearchClient
 
@@ -26,6 +27,12 @@ def test_agent_factory_loads_prompts_and_structured_outputs() -> None:
     assert get_agent_output_type("evidence_extraction") is EvidenceExtractionResult
     assert get_agent_output_type("synthesis") is Report
     assert get_agent_output_type("qa") is QAReview
+    assert get_agent_output_type("industry") is SpecialistAnalysis
+    assert get_agent_output_type("competitor") is SpecialistAnalysis
+    assert get_agent_output_type("news") is SpecialistAnalysis
+    assert get_agent_output_type("risk") is SpecialistAnalysis
+    assert get_agent_output_type("financial") is SpecialistAnalysis
+    assert get_agent_output_type("filings") is SpecialistAnalysis
 
 
 def test_agent_set_creates_required_phase_2_agents() -> None:
@@ -37,6 +44,12 @@ def test_agent_set_creates_required_phase_2_agents() -> None:
     assert agent_set.evidence_extraction.name == "Evidence Extraction Agent"
     assert agent_set.synthesis.name == "Synthesis Agent"
     assert agent_set.qa.name == "QA Agent"
+    assert agent_set.industry.name == "Industry Agent"
+    assert agent_set.competitor.name == "Competitor Agent"
+    assert agent_set.news.name == "News Agent"
+    assert agent_set.risk.name == "Risk Agent"
+    assert agent_set.financial.name == "Financial Agent"
+    assert agent_set.filings.name == "Filings Agent"
 
 
 def test_source_discovery_agent_receives_web_search_tool() -> None:

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from agentic_research import cli
-from agentic_research.models import ResearchCharter, ResearchPlan, RunMetadata, SourceMap
+from agentic_research.models import QAReview, ResearchCharter, ResearchPlan, RunMetadata, SourceMap
 from agentic_research.orchestrator import run_research
 
 
@@ -136,3 +136,60 @@ def test_cli_run_subcommand_accepts_full_mode(monkeypatch, tmp_path) -> None:
     assert captured["kwargs"]["full"] is True
     assert captured["kwargs"]["checkpoint_only"] is False
     assert "run_full" in result.stdout
+
+
+def test_cli_run_subcommand_accepts_qa_mode(monkeypatch, tmp_path) -> None:
+    captured = {}
+    checkpoint_path = tmp_path / "runs" / "run_qa" / "checkpoint.md"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text("# checkpoint")
+
+    result_obj = SimpleNamespace(
+        metadata=RunMetadata(
+            run_id="run_qa",
+            created_at="2026-05-18T00:00:00+00:00",
+            request="Research Salesforce for an investment memo",
+            status="report_ready",
+            mode="standard",
+            lens="investment",
+            mock=False,
+        ),
+        checkpoint_path=checkpoint_path,
+        run_dir=checkpoint_path.parent,
+        charter=ResearchCharter(
+            target="Salesforce",
+            target_type="company",
+            research_lens="investment",
+            depth="standard",
+            deliverable="investment_memo",
+            key_questions=["What matters for the investment memo?"],
+        ),
+        research_plan=ResearchPlan(
+            research_questions=["What matters for the investment memo?"],
+            report_sections=["overview"],
+            required_source_types=["primary_company"],
+            checkpoint_questions=["Which risk matters?"],
+        ),
+        sources=[],
+        source_map=SourceMap(sources=[], scores=[], gaps=[]),
+        evidence_ledger=None,
+        qa_review=QAReview(ready_to_publish=True, issues=[]),
+    )
+
+    def fake_run_research(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return result_obj
+
+    monkeypatch.setattr(cli, "run_research", fake_run_research)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["run", "Research Salesforce for an investment memo", "--full", "--qa"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["full"] is True
+    assert captured["kwargs"]["qa"] is True
+    assert "run_qa" in result.stdout

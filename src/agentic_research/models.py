@@ -6,7 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 TargetType = Literal["company", "industry", "market", "competitor_set", "person", "other"]
-ResearchLens = Literal["general", "sales", "investment", "interview", "strategy", "diligence"]
+ResearchLens = Literal[
+    "general",
+    "sales",
+    "investment",
+    "interview",
+    "strategy",
+    "industry",
+    "diligence",
+]
 ResearchDepth = Literal["brief", "standard", "deep_dive"]
 BiasRisk = Literal["low", "medium", "high"]
 ClaimType = Literal["fact", "inference", "opinion", "unknown"]
@@ -107,6 +115,14 @@ class EvidenceLedger(StrictModel):
 
 class EvidenceExtractionResult(StrictModel):
     claims: list[EvidenceClaim]
+    notes: str | None = None
+
+
+class SpecialistAnalysis(StrictModel):
+    specialist: str
+    summary: str
+    evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
     notes: str | None = None
 
 

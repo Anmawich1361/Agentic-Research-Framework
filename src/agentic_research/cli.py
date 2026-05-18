@@ -25,7 +25,11 @@ def run_command(
     ] = False,
     full: Annotated[
         bool,
-        typer.Option("--full", help="Run through evidence extraction without report generation."),
+        typer.Option("--full", help="Run through evidence extraction and report generation."),
+    ] = False,
+    qa: Annotated[
+        bool,
+        typer.Option("--qa", help="Run QA/red-team review after draft report generation."),
     ] = False,
     mode: Annotated[str, typer.Option("--mode", help="Research depth mode.")] = "standard",
     lens: Annotated[str | None, typer.Option("--lens", help="Optional research lens override.")] = None,
@@ -41,6 +45,7 @@ def run_command(
             lens=lens,
             checkpoint_only=checkpoint_only,
             full=full,
+            qa=qa,
             mock=mock,
             model=model,
         )

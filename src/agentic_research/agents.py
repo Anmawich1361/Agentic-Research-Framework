@@ -15,6 +15,7 @@ from agentic_research.models import (
     ResearchPlan,
     SourceCandidate,
     SourceDiscoveryResult,
+    SpecialistAnalysis,
 )
 from agentic_research.prompts import load_agent_prompt
 from agentic_research.tools.web_search import WebSearchClient, create_web_search_tool
@@ -27,6 +28,12 @@ AgentKey: TypeAlias = Literal[
     "evidence_extraction",
     "synthesis",
     "qa",
+    "industry",
+    "competitor",
+    "news",
+    "risk",
+    "financial",
+    "filings",
 ]
 
 
@@ -46,6 +53,12 @@ class ResearchAgentSet:
     evidence_extraction: Any
     synthesis: Any
     qa: Any
+    industry: Any
+    competitor: Any
+    news: Any
+    risk: Any
+    financial: Any
+    filings: Any
 
 
 AGENT_SPECS: dict[AgentKey, AgentSpec] = {
@@ -65,6 +78,17 @@ AGENT_SPECS: dict[AgentKey, AgentSpec] = {
     ),
     "synthesis": AgentSpec("synthesis", "Synthesis Agent", "synthesis_agent", Report),
     "qa": AgentSpec("qa", "QA Agent", "qa_agent", QAReview),
+    "industry": AgentSpec("industry", "Industry Agent", "industry_agent", SpecialistAnalysis),
+    "competitor": AgentSpec(
+        "competitor",
+        "Competitor Agent",
+        "competitor_agent",
+        SpecialistAnalysis,
+    ),
+    "news": AgentSpec("news", "News Agent", "news_agent", SpecialistAnalysis),
+    "risk": AgentSpec("risk", "Risk Agent", "risk_agent", SpecialistAnalysis),
+    "financial": AgentSpec("financial", "Financial Agent", "financial_agent", SpecialistAnalysis),
+    "filings": AgentSpec("filings", "Filings Agent", "filings_agent", SpecialistAnalysis),
 }
 
 
@@ -118,6 +142,12 @@ def create_agent_set(
         evidence_extraction=create_research_agent("evidence_extraction", model=model),
         synthesis=create_research_agent("synthesis", model=model),
         qa=create_research_agent("qa", model=model),
+        industry=create_research_agent("industry", model=model),
+        competitor=create_research_agent("competitor", model=model),
+        news=create_research_agent("news", model=model),
+        risk=create_research_agent("risk", model=model),
+        financial=create_research_agent("financial", model=model),
+        filings=create_research_agent("filings", model=model),
     )
 
 
@@ -156,6 +186,8 @@ def _infer_lens(request: str, explicit_lens: str | None) -> str:
         return "sales"
     if "interview" in lowered:
         return "interview"
+    if "industry" in lowered:
+        return "industry"
     if "diligence" in lowered:
         return "diligence"
     if "strategy" in lowered:
@@ -169,6 +201,7 @@ def _deliverable_for_lens(lens: str) -> str:
         "sales": "meeting_prep_brief",
         "interview": "interview_prep_brief",
         "strategy": "strategy_brief",
+        "industry": "industry_primer",
         "diligence": "diligence_brief",
     }.get(lens, "company_brief")
 
