@@ -135,9 +135,10 @@ def test_render_mock_report_includes_required_phase_5_sections() -> None:
     )
 
     assert "## Executive Summary" in report.markdown
-    assert "## Key Findings" in report.markdown
     assert "## Business Overview" in report.markdown
-    assert "## Competitors" in report.markdown
+    assert "## Market Context" in report.markdown
+    assert "## Competitive Landscape" in report.markdown
+    assert "## Recent Developments" in report.markdown
     assert "## Risks" in report.markdown
     assert "## Open Questions" in report.markdown
     assert "## Source Appendix" in report.markdown

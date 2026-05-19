@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
+from agentic_research.evidence_quality import evidence_quality_validation_warnings
 from agentic_research.models import (
     EvidenceClaim,
     EvidenceLedger as EvidenceLedgerModel,
@@ -114,6 +115,8 @@ class EvidenceLedger:
                 f"{claim_id}: duplicate evidence claim id appears {len(positions)} "
                 f"times at positions {position_text} with {content_description}."
             )
+
+        warnings.extend(evidence_quality_validation_warnings(self.claims))
 
         for claim in self.claims:
             if claim.claim_type == "fact" and not (claim.source_id or claim.source_url):

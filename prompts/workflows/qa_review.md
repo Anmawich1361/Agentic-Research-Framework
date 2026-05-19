@@ -12,6 +12,7 @@ Return:
 - ready_to_publish
 - issues
 - severity
+- issue category when possible
 - suggested fixes
 - affected sections
 

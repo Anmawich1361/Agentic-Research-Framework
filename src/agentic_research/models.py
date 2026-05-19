@@ -20,6 +20,18 @@ BiasRisk = Literal["low", "medium", "high"]
 ClaimType = Literal["fact", "inference", "opinion", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 Severity = Literal["high", "medium", "low"]
+SourceFetchStatus = Literal["fetched", "failed", "skipped"]
+RunType = Literal["checkpoint", "full", "continue"]
+IssueCategory = Literal[
+    "unsupported_claim",
+    "weak_source",
+    "missing_recent_signal",
+    "overconfident_inference",
+    "source_gap",
+    "stale_or_unclear_recency",
+    "missing_user_context",
+    "report_structure_issue",
+]
 
 
 class StrictModel(BaseModel):
@@ -55,6 +67,21 @@ class ResearchPlan(StrictModel):
     likely_specialists: list[str] = Field(default_factory=list)
     known_risks: list[str] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
+
+
+class CheckpointAnswer(StrictModel):
+    question: str
+    answer: str
+
+
+class UserFeedback(StrictModel):
+    answered_checkpoint_questions: list[CheckpointAnswer] = Field(default_factory=list)
+    approved_source_ids: list[str] = Field(default_factory=list)
+    rejected_source_ids: list[str] = Field(default_factory=list)
+    depth_override: ResearchDepth | None = None
+    lens_override: ResearchLens | None = None
+    user_notes: str | None = None
+    priority_topics: list[str] = Field(default_factory=list)
 
 
 class SourceCandidate(StrictModel):
@@ -95,6 +122,40 @@ class SourceDiscoveryResult(StrictModel):
     notes: str | None = None
 
 
+class SourceChunk(StrictModel):
+    source_id: str
+    url: str
+    chunk_id: str
+    index: int
+    text: str
+
+
+class SourceContent(StrictModel):
+    source_id: str
+    url: str
+    content_type: str | None = None
+    title: str | None = None
+    text: str
+    excerpt: str | None = None
+    chunks: list[SourceChunk] = Field(default_factory=list)
+
+
+class SourceFetchResult(StrictModel):
+    source_id: str
+    url: str
+    status: SourceFetchStatus
+    content_type: str | None = None
+    title: str | None = None
+    text: str | None = None
+    excerpt: str | None = None
+    chunks: list[SourceChunk] = Field(default_factory=list)
+    error: str | None = None
+
+
+class SourceFetchLog(StrictModel):
+    results: list[SourceFetchResult] = Field(default_factory=list)
+
+
 class EvidenceClaim(StrictModel):
     id: str
     claim: str
@@ -131,6 +192,7 @@ class QAIssue(StrictModel):
     problem: str
     suggested_fix: str
     affected_section: str | None = None
+    category: IssueCategory | None = None
 
 
 class QAReview(StrictModel):
@@ -150,8 +212,14 @@ class Report(StrictModel):
 class RunMetadata(StrictModel):
     run_id: str
     created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_seconds: float | None = None
     request: str
     status: str
+    status_reason: str | None = None
     mode: str = "standard"
     lens: str = "general"
     mock: bool = True
+    model: str | None = None
+    run_type: RunType | None = None

@@ -2,19 +2,13 @@
 
 ## Executive Summary
 
-## Why This Meeting Matters
+## Context for Meeting
 
-## Company / Organization Overview
+## What We Know
 
-## Recent Developments
+## What We Do Not Know
 
-## Likely Priorities
-
-## Pain Points and Opportunities
-
-## Competitors / Alternatives
-
-## Talking Points
+## Supplier/Buyer Angle
 
 ## Questions to Ask
 

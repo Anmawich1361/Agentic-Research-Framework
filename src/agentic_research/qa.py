@@ -3,18 +3,28 @@ from __future__ import annotations
 from agentic_research.evidence_ledger import EvidenceLedger
 from agentic_research.models import (
     EvidenceLedger as EvidenceLedgerModel,
+    IssueCategory,
     QAIssue,
     QAReview,
     Report,
     Severity,
     SourceMap,
 )
+from agentic_research.report_validation import validate_report
 
 
-def _has_heading(markdown: str, heading: str) -> bool:
-    normalized = markdown.lower()
-    target = heading.lower()
-    return f"## {target}" in normalized or f"# {target}" in normalized
+def _issue_category_for_evidence_warning(warning: str) -> IssueCategory:
+    if "source id or URL" in warning:
+        return "unsupported_claim"
+    if "unknown source id" in warning or "source map URL" in warning:
+        return "source_gap"
+    if "low-authority" in warning or "authority score" in warning:
+        return "weak_source"
+    if "near-duplicate" in warning or "duplicate evidence claim id" in warning:
+        return "report_structure_issue"
+    if "source_metadata_only" in warning or "source_finding_aid" in warning:
+        return "weak_source"
+    return "unsupported_claim"
 
 
 def run_deterministic_qa_checks(
@@ -22,37 +32,15 @@ def run_deterministic_qa_checks(
     source_map: SourceMap,
     evidence_ledger: EvidenceLedgerModel,
     draft_report: Report,
+    template_name: str | None = None,
 ) -> QAReview:
-    issues: list[QAIssue] = []
-    markdown = draft_report.markdown
-
-    if not _has_heading(markdown, "Source Appendix"):
-        issues.append(
-            QAIssue(
-                severity="medium",
-                problem="Report is missing a source appendix section.",
-                suggested_fix="Add a Source Appendix section based on the source map.",
-                affected_section="Source Appendix",
-            )
-        )
-    if not _has_heading(markdown, "Risks"):
-        issues.append(
-            QAIssue(
-                severity="medium",
-                problem="Report is missing a risks section.",
-                suggested_fix="Add a Risks section with evidence-backed caveats.",
-                affected_section="Risks",
-            )
-        )
-    if not _has_heading(markdown, "Open Questions"):
-        issues.append(
-            QAIssue(
-                severity="medium",
-                problem="Report is missing an open questions section.",
-                suggested_fix="Add Open Questions that identify unresolved research gaps.",
-                affected_section="Open Questions",
-            )
-        )
+    report_review = validate_report(
+        draft_report,
+        evidence_ledger=evidence_ledger,
+        source_map=source_map,
+        template_name=template_name,
+    )
+    issues: list[QAIssue] = list(report_review.issues)
 
     ledger = EvidenceLedger(evidence_ledger.claims)
     evidence_warnings = ledger.validate(
@@ -72,6 +60,7 @@ def run_deterministic_qa_checks(
         issues.append(
             QAIssue(
                 severity=severity,
+                category=_issue_category_for_evidence_warning(warning),
                 problem=warning,
                 suggested_fix="Fix the evidence ledger before publishing the report.",
                 affected_section="Evidence Ledger",
