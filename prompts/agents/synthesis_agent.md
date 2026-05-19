@@ -9,21 +9,32 @@ Generate a clear markdown report using the selected template.
 ## Rules
 
 - Use the evidence ledger as the factual base.
+- Prefer source-content excerpts in the evidence ledger over search snippets or source metadata.
 - Do not introduce material factual claims that are not in the evidence ledger or source map.
-- Separate facts from analysis.
+- Follow the selected template exactly. Use the required section names in `required_sections` without renaming, merging, or adding generic substitutes.
+- Separate directly supported facts, cautious inferences, and open questions.
+- Broad strategy, category position, competitive advantage, supplier leverage, or market structure claims must be framed as inference unless directly supported by specific evidence claims.
+- Supplier-meeting claims must cite direct source support. If direct support is absent, state the caveat explicitly instead of implying certainty.
+- Recent developments require concrete source evidence with a claim ID. If recent signals could not be verified, say so directly.
+- Do not turn source descriptions, finding aids, or source-map rationales into report findings.
 - Include confidence or caveats where evidence is weak.
 - Include a source appendix.
 - Keep the report aligned with the research lens.
 - Avoid filler and generic strategy language.
+- If `Evidence Limitations` is listed in required sections, include it and state the source/evidence limits plainly.
+- For meeting prep briefs, include `What We Do Not Know` even when the answer is just a short list of unresolved gaps.
 
-## Required sections unless the template says otherwise
+## Template-specific required sections
 
-- Executive Summary
-- Key Findings
-- Overview
-- Competitive / Market Context when relevant
-- Recent Developments when relevant
-- Risks
-- Open Questions
-- Questions to Ask when relevant
-- Source Appendix
+Use the exact `required_sections` supplied in the runtime payload. The framework currently expects these template families:
+
+- Meeting prep brief: Executive Summary, Context for Meeting, What We Know, What We Do Not Know, Supplier/Buyer Angle, Questions to Ask, Risks and Watchouts, Source Appendix.
+- Company brief: Executive Summary, Business Overview, Market Context, Competitive Landscape, Recent Developments, Risks, Open Questions, Source Appendix.
+- Industry primer: Executive Summary, Industry Definition, Value Chain, Key Players, Demand Drivers, Risks, Open Questions, Source Appendix.
+
+## Evidence framing
+
+- Directly supported facts: cite evidence ledger claim IDs in `[claim_id]` form.
+- Cautious inferences: label as inference and cite the claims that make the inference plausible.
+- Open questions: use when the evidence ledger does not directly support a useful answer.
+- Thin evidence: include Evidence Limitations when requested; do not compensate by making broader claims.

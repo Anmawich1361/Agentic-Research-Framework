@@ -1,0 +1,158 @@
+{
+  "id": "industry_primer",
+  "name": "Industry primer",
+  "request": "Research the US electric vehicle charging industry",
+  "template_name": "industry_primer.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_doe_charging",
+        "title": "DOE EV charging infrastructure overview",
+        "publisher": "Department of Energy",
+        "url": "https://example.com/doe-ev-charging",
+        "source_type": "government",
+        "bias_risk": "low",
+        "relevance_rationale": "Authoritative public source for charging infrastructure context.",
+        "recommended_uses": ["industry definition", "value chain"],
+        "publication_date": "2026-01-20"
+      },
+      {
+        "id": "src_iea_ev",
+        "title": "IEA electric vehicle outlook",
+        "publisher": "International Energy Agency",
+        "url": "https://example.com/iea-ev",
+        "source_type": "industry_primer",
+        "bias_risk": "low",
+        "relevance_rationale": "Independent demand and adoption context.",
+        "recommended_uses": ["demand drivers"],
+        "publication_date": "2025-11-01"
+      },
+      {
+        "id": "src_charging_trade",
+        "title": "Charging network operator update",
+        "publisher": "Trade Publication",
+        "url": "https://example.com/charging-networks",
+        "source_type": "trade_publication",
+        "bias_risk": "medium",
+        "relevance_rationale": "Context on charging-network operators.",
+        "recommended_uses": ["key players"],
+        "publication_date": "2025-09-12"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_doe_charging",
+        "authority_score": 5,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "low",
+        "final_score": 4.8,
+        "include": true
+      },
+      {
+        "source_id": "src_iea_ev",
+        "authority_score": 5,
+        "relevance_score": 5,
+        "recency_score": 4,
+        "coverage_score": 5,
+        "bias_risk": "low",
+        "final_score": 4.7,
+        "include": true
+      },
+      {
+        "source_id": "src_charging_trade",
+        "authority_score": 4,
+        "relevance_score": 4,
+        "recency_score": 4,
+        "coverage_score": 3,
+        "bias_risk": "medium",
+        "final_score": 3.8,
+        "include": true
+      }
+    ],
+    "gaps": ["Local utility interconnection timelines vary by market."]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_1",
+        "claim": "EV charging infrastructure includes equipment, site hosts, grid interconnection, and network services.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Industry Definition",
+        "source_id": "src_doe_charging",
+        "source_url": "https://example.com/doe-ev-charging",
+        "quote_or_excerpt": "Charging infrastructure includes charging equipment, site preparation, and utility connection."
+      },
+      {
+        "id": "claim_2",
+        "claim": "Charging value-chain participants include equipment suppliers, installers, utilities, site hosts, and network operators.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Value Chain",
+        "source_id": "src_doe_charging",
+        "source_url": "https://example.com/doe-ev-charging",
+        "quote_or_excerpt": "Stakeholders include utilities, equipment providers, charging networks, and site hosts."
+      },
+      {
+        "id": "claim_3",
+        "claim": "Public charging demand is linked to electric vehicle adoption.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Demand Drivers",
+        "source_id": "src_iea_ev",
+        "source_url": "https://example.com/iea-ev",
+        "quote_or_excerpt": "Charging demand grows as electric vehicle adoption increases."
+      },
+      {
+        "id": "claim_4",
+        "claim": "Charging-network operators are a key participant group in public charging.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "Key Players",
+        "source_id": "src_charging_trade",
+        "source_url": "https://example.com/charging-networks",
+        "quote_or_excerpt": "Charging-network operators manage public charging locations and customer access."
+      },
+      {
+        "id": "claim_5",
+        "claim": "Utility interconnection can affect charger deployment timelines.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Risks",
+        "source_id": "src_doe_charging",
+        "source_url": "https://example.com/doe-ev-charging",
+        "quote_or_excerpt": "Utility connection and site work can affect project timelines."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "US EV Charging Industry Primer",
+    "source_ids": ["src_doe_charging", "src_iea_ev", "src_charging_trade"],
+    "claim_ids": ["claim_1", "claim_2", "claim_3", "claim_4", "claim_5"],
+    "markdown": "# US EV Charging Industry Primer\n\n## Executive Summary\nThe EV charging industry combines equipment, site deployment, utilities, site hosts, network operators, and demand tied to EV adoption. [claim_1] [claim_2] [claim_3] [claim_4]\n\n## Industry Definition\nEV charging infrastructure includes hardware, site preparation, utility connection, and network services. [claim_1]\n\n## Value Chain\nThe value chain includes equipment suppliers, installers, utilities, site hosts, and charging-network operators. [claim_2]\n\n## Key Players\nCharging-network operators are one key participant group; the fixture does not rank individual companies. [claim_4]\n\n## Demand Drivers\nPublic charging demand is linked to electric vehicle adoption. [claim_3]\n\n## Risks\nUtility interconnection can affect deployment timelines. [claim_5]\n\n## Open Questions\n- Which local utility territories and site-host types matter most for the target use case?\n- How do installation timelines vary by state or metro area? [claim_5]\n\n## Source Appendix\n- DOE EV charging infrastructure overview (src_doe_charging) https://example.com/doe-ev-charging\n- IEA electric vehicle outlook (src_iea_ev) https://example.com/iea-ev\n- Charging network operator update (src_charging_trade) https://example.com/charging-networks\n"
+  },
+  "expected_qa": {
+    "ready_to_publish": true,
+    "max_high_issues": 0,
+    "max_medium_issues": 0,
+    "max_low_issues": 0,
+    "max_high_unsupported_claims": 0,
+    "forbidden_categories": ["unsupported_claim", "source_gap"],
+    "min_claim_count": 5,
+    "min_source_count": 3,
+    "requires_recent_source": true
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Industry Definition",
+    "Value Chain",
+    "Key Players",
+    "Demand Drivers",
+    "Risks",
+    "Open Questions",
+    "Source Appendix"
+  ]
+}

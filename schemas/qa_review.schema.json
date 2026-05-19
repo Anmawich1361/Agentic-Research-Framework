@@ -34,6 +34,23 @@
               "string",
               "null"
             ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "unsupported_claim",
+              "weak_source",
+              "missing_recent_signal",
+              "overconfident_inference",
+              "source_gap",
+              "stale_or_unclear_recency",
+              "missing_user_context",
+              "report_structure_issue",
+              null
+            ]
           }
         }
       }

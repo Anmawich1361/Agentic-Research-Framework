@@ -6,18 +6,12 @@
 
 ## Value Chain
 
-## Customer Segments
+## Key Players
 
-## Market Structure
+## Demand Drivers
 
-## Major Players
+## Risks
 
-## Growth Drivers
-
-## Regulation and Constraints
-
-## Trends
-
-## Risks and Open Questions
+## Open Questions
 
 ## Source Appendix

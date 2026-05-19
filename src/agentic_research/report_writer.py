@@ -171,8 +171,9 @@ def render_mock_report(
     source_map: SourceMap,
     evidence_ledger: EvidenceLedger,
 ) -> Report:
+    template_name = select_report_template_name(charter)
     rendered_template = render_markdown_template(
-        load_template(select_report_template_name(charter)),
+        load_template(template_name),
         {"target": charter.target},
     )
     title = rendered_template.splitlines()[0] if rendered_template.splitlines() else f"# {charter.target}"
@@ -193,23 +194,84 @@ def render_mock_report(
     if source_appendix.startswith("# "):
         source_appendix = f"#{source_appendix}"
 
-    markdown = (
-        f"{title}\n\n"
-        "## Executive Summary\n"
-        f"- This draft is based on {len(evidence_ledger.claims)} evidence claims "
-        f"and {len(source_map.sources)} scored sources.\n\n"
-        "## Key Findings\n"
-        f"{key_findings}\n\n"
-        "## Business Overview\n"
-        f"- {charter.target} should be described only from evidence-backed claims.\n\n"
-        "## Competitors\n"
-        "- Competitive context remains a follow-up item unless supported by extracted evidence.\n\n"
-        "## Risks\n"
-        f"{risks}\n\n"
-        "## Open Questions\n"
-        f"{open_questions}\n\n"
-        f"{source_appendix}\n"
-    )
+    if template_name == "meeting_prep.md":
+        markdown = (
+            f"{title}\n\n"
+            "## Executive Summary\n"
+            f"- This draft is based on {len(evidence_ledger.claims)} evidence claims "
+            f"and {len(source_map.sources)} scored sources.\n\n"
+            "## Context for Meeting\n"
+            "- Meeting context should be limited to evidence-backed claims.\n\n"
+            "## What We Know\n"
+            f"{key_findings}\n\n"
+            "## What We Do Not Know\n"
+            f"{open_questions}\n\n"
+            "## Supplier/Buyer Angle\n"
+            "- Supplier or buyer implications remain open unless supported by direct evidence.\n\n"
+            "## Questions to Ask\n"
+            f"{open_questions}\n\n"
+            "## Risks and Watchouts\n"
+            f"{risks}\n\n"
+            f"{source_appendix}\n"
+        )
+    elif template_name == "industry_primer.md":
+        markdown = (
+            f"{title}\n\n"
+            "## Executive Summary\n"
+            f"- This draft is based on {len(evidence_ledger.claims)} evidence claims "
+            f"and {len(source_map.sources)} scored sources.\n\n"
+            "## Industry Definition\n"
+            f"{key_findings}\n\n"
+            "## Value Chain\n"
+            "- Value-chain details remain open unless supported by extracted evidence.\n\n"
+            "## Key Players\n"
+            "- Key-player details remain open unless supported by extracted evidence.\n\n"
+            "## Demand Drivers\n"
+            "- Demand-driver details remain open unless supported by extracted evidence.\n\n"
+            "## Risks\n"
+            f"{risks}\n\n"
+            "## Open Questions\n"
+            f"{open_questions}\n\n"
+            f"{source_appendix}\n"
+        )
+    elif template_name == "company_brief.md":
+        markdown = (
+            f"{title}\n\n"
+            "## Executive Summary\n"
+            f"- This draft is based on {len(evidence_ledger.claims)} evidence claims "
+            f"and {len(source_map.sources)} scored sources.\n\n"
+            "## Business Overview\n"
+            f"{key_findings}\n\n"
+            "## Market Context\n"
+            "- Market context remains open unless supported by extracted evidence.\n\n"
+            "## Competitive Landscape\n"
+            "- Competitive context remains open unless supported by extracted evidence.\n\n"
+            "## Recent Developments\n"
+            "- Recent developments require concrete source evidence before inclusion.\n\n"
+            "## Risks\n"
+            f"{risks}\n\n"
+            "## Open Questions\n"
+            f"{open_questions}\n\n"
+            f"{source_appendix}\n"
+        )
+    else:
+        markdown = (
+            f"{title}\n\n"
+            "## Executive Summary\n"
+            f"- This draft is based on {len(evidence_ledger.claims)} evidence claims "
+            f"and {len(source_map.sources)} scored sources.\n\n"
+            "## Key Findings\n"
+            f"{key_findings}\n\n"
+            "## Business Overview\n"
+            f"- {charter.target} should be described only from evidence-backed claims.\n\n"
+            "## Competitors\n"
+            "- Competitive context remains a follow-up item unless supported by extracted evidence.\n\n"
+            "## Risks\n"
+            f"{risks}\n\n"
+            "## Open Questions\n"
+            f"{open_questions}\n\n"
+            f"{source_appendix}\n"
+        )
     return Report(
         title=f"{charter.target} Research Report",
         markdown=markdown,

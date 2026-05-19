@@ -2,22 +2,16 @@
 
 ## Executive Summary
 
-## Key Findings
+## Business Overview
 
-## What the Company Does
+## Market Context
 
-## Business Model
-
-## Customers and Use Cases
-
-## Industry Context
-
-## Competitors
+## Competitive Landscape
 
 ## Recent Developments
 
-## Risks and Open Questions
+## Risks
 
-## Questions to Ask
+## Open Questions
 
 ## Source Appendix

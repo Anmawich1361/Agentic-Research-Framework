@@ -1,0 +1,127 @@
+{
+  "id": "company_meeting_prep",
+  "name": "Company meeting prep brief",
+  "request": "Research Costco before a supplier meeting",
+  "template_name": "meeting_prep.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_costco_vendor",
+        "title": "Costco vendor information",
+        "publisher": "Costco Wholesale",
+        "url": "https://example.com/costco-vendor",
+        "source_type": "primary_company",
+        "bias_risk": "medium",
+        "relevance_rationale": "Primary vendor contact and onboarding context.",
+        "recommended_uses": ["supplier meeting"],
+        "publication_date": "2026-01-15"
+      },
+      {
+        "id": "src_costco_10k",
+        "title": "Costco annual report",
+        "publisher": "SEC",
+        "url": "https://example.com/costco-10k",
+        "source_type": "corporate_filing",
+        "bias_risk": "low",
+        "relevance_rationale": "Primary source for business model and risk context.",
+        "recommended_uses": ["business context", "risk context"],
+        "publication_date": "2025-10-08"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_costco_vendor",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4.5,
+        "include": true
+      },
+      {
+        "source_id": "src_costco_10k",
+        "authority_score": 5,
+        "relevance_score": 4,
+        "recency_score": 4,
+        "coverage_score": 4,
+        "bias_risk": "low",
+        "final_score": 4.4,
+        "include": true
+      }
+    ],
+    "gaps": ["Specific supplier category is not identified."]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_1",
+        "claim": "Costco publishes vendor contact paths for prospective suppliers.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "What We Know",
+        "source_id": "src_costco_vendor",
+        "source_url": "https://example.com/costco-vendor",
+        "quote_or_excerpt": "Vendor inquiries may be directed to the applicable buying office."
+      },
+      {
+        "id": "claim_2",
+        "claim": "Costco describes its warehouse model as focused on member value and limited selection.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Context for Meeting",
+        "source_id": "src_costco_10k",
+        "source_url": "https://example.com/costco-10k",
+        "quote_or_excerpt": "We operate membership warehouses based on value and selected merchandise."
+      },
+      {
+        "id": "claim_3",
+        "claim": "Costco identifies supply continuity and merchandise availability as operating risks.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Risks and Watchouts",
+        "source_id": "src_costco_10k",
+        "source_url": "https://example.com/costco-10k",
+        "quote_or_excerpt": "Disruptions in supply chains may affect merchandise availability."
+      },
+      {
+        "id": "claim_4",
+        "claim": "The request omits the supplier category, buyer team, and region.",
+        "claim_type": "inference",
+        "confidence": "medium",
+        "report_section": "What We Do Not Know",
+        "source_id": "src_costco_vendor",
+        "source_url": "https://example.com/costco-vendor",
+        "quote_or_excerpt": "Vendor inquiries may be directed to the applicable buying office."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Costco Supplier Meeting Prep",
+    "source_ids": ["src_costco_vendor", "src_costco_10k"],
+    "claim_ids": ["claim_1", "claim_2", "claim_3", "claim_4"],
+    "markdown": "# Costco Supplier Meeting Prep\n\n## Executive Summary\nCostco supplier prep should be anchored in vendor routing, member-value positioning, and supply continuity evidence. [claim_1] [claim_2] [claim_3]\n\n## Context for Meeting\nCostco's warehouse model emphasizes member value and selected merchandise, so supplier fit should be discussed in that context. [claim_2]\n\n## What We Know\n- Costco publishes vendor contact paths for prospective suppliers. [claim_1]\n- Costco describes supply continuity and merchandise availability as operating risks. [claim_3]\n\n## What We Do Not Know\n- The request omits the supplier category, buyer team, and region. [claim_4]\n\n## Supplier/Buyer Angle\nFrame category fit as a hypothesis until the buyer team and product category are confirmed. [claim_4]\n\n## Questions to Ask\n- Which buying office, product category, and region should the supplier prepare for? [claim_1] [claim_4]\n\n## Risks and Watchouts\n- Do not assume Costco-specific category priorities until category context is known. [claim_4]\n- Prepare evidence for supply continuity because merchandise availability is a stated operating risk. [claim_3]\n\n## Source Appendix\n- Costco vendor information (src_costco_vendor) https://example.com/costco-vendor\n- Costco annual report (src_costco_10k) https://example.com/costco-10k\n"
+  },
+  "expected_qa": {
+    "ready_to_publish": true,
+    "max_high_issues": 0,
+    "max_medium_issues": 0,
+    "max_low_issues": 0,
+    "max_high_unsupported_claims": 0,
+    "forbidden_categories": ["unsupported_claim", "source_gap"],
+    "min_claim_count": 4,
+    "min_source_count": 2,
+    "requires_recent_source": true
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Context for Meeting",
+    "What We Know",
+    "What We Do Not Know",
+    "Supplier/Buyer Angle",
+    "Questions to Ask",
+    "Risks and Watchouts",
+    "Source Appendix"
+  ]
+}
