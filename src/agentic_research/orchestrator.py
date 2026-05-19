@@ -314,6 +314,14 @@ _BRACKET_REFERENCE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]*)\]")
 _SOURCE_ID_REFERENCE_RE = re.compile(r"\b(src_[A-Za-z0-9_-]+)\b")
 
 
+class ReportSectionValidationError(ValueError):
+    def __init__(self, missing_sections: list[str]) -> None:
+        self.missing_sections = missing_sections
+        super().__init__(
+            f"Report is missing required sections: {', '.join(missing_sections)}"
+        )
+
+
 def _markdown_claim_references(markdown: str, known_claim_ids: set[str]) -> set[str]:
     references = set(_BRACKET_REFERENCE_RE.findall(markdown))
     return {
@@ -349,7 +357,7 @@ def _validate_report_traceability(
         raise ValueError(f"Report contains unknown source references: {', '.join(unknown)}")
 
 
-def _validate_report_sections(report: Report) -> None:
+def _missing_report_sections(report: Report) -> list[str]:
     markdown = report.markdown.lower()
     required_terms = [
         "executive summary",
@@ -362,8 +370,73 @@ def _validate_report_sections(report: Report) -> None:
     missing = [term for term in required_terms if term not in markdown]
     if "business overview" not in markdown and "industry overview" not in markdown:
         missing.append("business or industry overview")
+    return missing
+
+
+def _validate_report_sections(report: Report) -> None:
+    missing = _missing_report_sections(report)
     if missing:
-        raise ValueError(f"Report is missing required sections: {', '.join(missing)}")
+        raise ReportSectionValidationError(missing)
+
+
+def _unique_nonempty(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_items: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique_items.append(normalized)
+    return unique_items
+
+
+def _format_markdown_bullets(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _repair_missing_report_sections(
+    report: Report,
+    *,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+) -> Report:
+    missing = _missing_report_sections(report)
+    if "open questions" not in missing:
+        return report
+
+    open_questions = _unique_nonempty(
+        [
+            *plan.checkpoint_questions,
+            *source_map.gaps,
+            *plan.data_gaps,
+        ]
+    )
+    if not open_questions:
+        open_questions = [
+            "No open questions were identified from checkpoint questions, "
+            "source-map gaps, or plan data gaps."
+        ]
+
+    markdown = (
+        f"{report.markdown.rstrip()}\n\n"
+        "## Open Questions\n"
+        f"{_format_markdown_bullets(open_questions)}\n"
+    )
+    return report.model_copy(update={"markdown": markdown})
+
+
+def _should_write_final_report(
+    *,
+    report: Report | None,
+    qa_requested: bool,
+    qa_review: QAReview | None,
+) -> bool:
+    return (
+        report is not None
+        and qa_requested
+        and qa_review is not None
+        and not has_high_severity_issues(qa_review)
+    )
 
 
 def _create_mock_report(
@@ -496,7 +569,11 @@ def run_research(
             else None
         )
         has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
-        write_final_report = report is not None and qa and not has_blocking_qa
+        write_final_report = _should_write_final_report(
+            report=report,
+            qa_requested=qa,
+            qa_review=qa_review,
+        )
         return _write_checkpoint_artifacts(
             run_id=run_id,
             run_dir=run_dir,
@@ -669,6 +746,13 @@ def run_research(
                     "Open Questions",
                     "Source Appendix",
                 ],
+                "section_requirements": [
+                    "Open Questions is mandatory even if there are few known gaps.",
+                    "If needed, write an empty-but-honest Open Questions section from "
+                    "research_plan.checkpoint_questions, source_map.gaps, or "
+                    "research_plan.data_gaps.",
+                    "Do not invent factual content to fill required sections.",
+                ],
                 "source_reference_rule": (
                     "Use only source IDs from source_map. Include Source IDs and URLs "
                     "in the Source Appendix."
@@ -689,28 +773,42 @@ def run_research(
                     agent_runner=agent_runner,
                 ),
             )
+            report = _repair_missing_report_sections(
+                report,
+                plan=plan,
+                source_map=source_map,
+            )
             _validate_report_traceability(
                 report,
                 evidence_ledger=evidence_ledger,
                 source_map=source_map,
             )
-            if not qa:
+            try:
                 _validate_report_sections(report)
-            if qa:
-                qa_review = _run_qa_review(
-                    agents=agents,
-                    charter=charter,
-                    source_map=source_map,
-                    evidence_ledger=evidence_ledger,
-                    report=report,
-                    agent_runner=agent_runner,
-                )
-                status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
+            except ReportSectionValidationError:
+                report = report.model_copy(update={"status": "draft_needs_revision"})
+                status = "draft_needs_revision"
             else:
-                status = "draft_needs_qa"
+                if qa:
+                    qa_review = _run_qa_review(
+                        agents=agents,
+                        charter=charter,
+                        source_map=source_map,
+                        evidence_ledger=evidence_ledger,
+                        report=report,
+                        agent_runner=agent_runner,
+                    )
+                    status = (
+                        "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
+                    )
+                else:
+                    status = "draft_needs_qa"
 
-    has_blocking_qa = qa_review is not None and has_high_severity_issues(qa_review)
-    write_final_report = report is not None and qa and not has_blocking_qa
+    write_final_report = _should_write_final_report(
+        report=report,
+        qa_requested=qa,
+        qa_review=qa_review,
+    )
 
     return _write_checkpoint_artifacts(
         run_id=run_id,
