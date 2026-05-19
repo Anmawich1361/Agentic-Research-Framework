@@ -369,6 +369,112 @@ def test_full_run_without_qa_writes_draft_only_from_mocked_synthesis_output(
     assert "## Source Appendix" in draft_report
 
 
+def test_full_run_repairs_missing_open_questions_and_keeps_draft_nonfinal(
+    tmp_path: Path,
+) -> None:
+    synthesis_prompt = ""
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        nonlocal synthesis_prompt
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company", "news"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+                data_gaps=["Supplier category not specified."],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ],
+                gaps=["Missing source type: news"],
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_costco_supplier",
+                        claim="Costco publishes supplier information for vendors.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis should stay source-bound.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            synthesis_prompt = prompt
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary.\n\n"
+                    "## Key Findings\n"
+                    "- Costco publishes supplier information for vendors. "
+                    "[claim_costco_supplier]\n\n"
+                    "## Business Overview\nCostco supplier context.\n\n"
+                    "## Competitors\nRelevant alternatives need follow-up.\n\n"
+                    "## Risks\nPrimary-source bias.\n\n"
+                    "## Source Appendix\n- Costco supplier information (src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    metadata = json.loads((run_dir / "metadata.json").read_text())
+    draft_report = (run_dir / "draft_report.md").read_text()
+
+    assert result.metadata.status == "draft_needs_qa"
+    assert metadata["status"] == "draft_needs_qa"
+    assert "Open Questions is mandatory" in synthesis_prompt
+    assert "## Open Questions" in draft_report
+    assert "Which supplier category should be prioritized?" in draft_report
+    assert "Missing source type: news" in draft_report
+    assert "Supplier category not specified." in draft_report
+    assert not (run_dir / "report.md").exists()
+
+
 def test_full_run_rejects_report_with_unknown_source_reference(tmp_path: Path) -> None:
     def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
         if agent_key == "intake":
@@ -888,3 +994,105 @@ def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path
     assert not (run_dir / "report.md").exists()
     qa_review = json.loads((run_dir / "qa_review.json").read_text())
     assert qa_review["issues"][0]["severity"] == "high"
+
+
+def test_full_qa_run_repairs_missing_open_questions_and_writes_final_when_qa_passes(
+    tmp_path: Path,
+) -> None:
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+                data_gaps=["Supplier category not specified."],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_costco_supplier",
+                        claim="Costco publishes supplier information for vendors.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis should stay source-bound.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary.\n\n"
+                    "## Key Findings\n"
+                    "- Costco publishes supplier information for vendors. "
+                    "[claim_costco_supplier]\n\n"
+                    "## Business Overview\nCostco supplier context.\n\n"
+                    "## Competitors\nRelevant alternatives need follow-up.\n\n"
+                    "## Risks\nPrimary-source bias.\n\n"
+                    "## Source Appendix\n- Costco supplier information (src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "qa":
+            return QAReview(ready_to_publish=True, issues=[])
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    final_report = (run_dir / "report.md").read_text()
+
+    assert result.metadata.status == "report_ready"
+    assert result.qa_review is not None
+    assert result.qa_review.issues == []
+    assert "## Open Questions" in final_report
+    assert "Which supplier category should be prioritized?" in final_report
+    assert "Supplier category not specified." in final_report
+    assert (run_dir / "draft_report.md").exists()
