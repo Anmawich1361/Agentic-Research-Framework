@@ -43,6 +43,9 @@ The system should treat the ledger as the factual substrate for the report.
 ## Validation rules
 
 - A fact must have a source id or source URL.
+- Claim IDs must be unique before synthesis. Identical duplicates are deduplicated
+  deterministically, conflicting base evidence IDs block synthesis, and conflicting
+  specialist evidence IDs are renamed with a stable specialist prefix.
 - A high-confidence fact should come from a high-authority source.
 - A claim based only on company marketing should not be overstated.
 - Inferences should be labeled as inferences.
