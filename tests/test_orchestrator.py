@@ -48,6 +48,13 @@ def _failing_source_fetcher(url: str, timeout_seconds: float) -> SourceHttpRespo
     raise TimeoutError("network disabled in tests")
 
 
+def _json_payload_from_prompt(prompt: str) -> dict[str, Any]:
+    payload = prompt.split("```json\n", 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(payload)
+    assert isinstance(parsed, dict)
+    return parsed
+
+
 def test_deduplicate_claims_drops_near_duplicate_specialist_claim_before_renaming() -> None:
     base_campaign_claim = EvidenceClaim(
         id="c12",
@@ -1150,6 +1157,413 @@ def test_full_run_marks_report_with_unknown_claim_reference_for_revision(
     assert result.report.status == "draft_needs_revision"
     assert (run_dir / "draft_report.md").exists()
     assert not (run_dir / "report.md").exists()
+
+
+def test_synthesis_payload_uses_final_allowed_claim_ids_after_specialist_dedup(
+    tmp_path: Path,
+) -> None:
+    synthesis_payload: dict[str, Any] = {}
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        nonlocal synthesis_payload
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="c1",
+                        claim="Costco requires suppliers to meet delivery windows.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    ),
+                    EvidenceClaim(
+                        id="c2",
+                        claim="Costco requires suppliers to provide accurate item data.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="supplier_context",
+                    ),
+                ]
+            )
+        if agent_key == "news":
+            return SpecialistAnalysis(
+                specialist="news",
+                summary="News analysis repeats final-ledger evidence.",
+                evidence_claims=[
+                    EvidenceClaim(
+                        id="r1",
+                        claim="Costco requires suppliers to meet delivery windows.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ],
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key in {"competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            synthesis_payload = _json_payload_from_prompt(prompt)
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary. [c1]\n\n"
+                    "## Context for Meeting\nContext. [c1]\n\n"
+                    "## What We Know\n"
+                    "- Costco requires suppliers to meet delivery windows. [c1]\n"
+                    "- Costco requires suppliers to provide accurate item data. [c2]\n\n"
+                    "## What We Do Not Know\n- Category-specific requirements.\n\n"
+                    "## Supplier/Buyer Angle\nCaveated angle. [c2]\n\n"
+                    "## Questions to Ask\n- Which supplier category matters?\n\n"
+                    "## Risks and Watchouts\n- Supplier requirements need validation. [c1]\n\n"
+                    "## Evidence Limitations\n"
+                    "- Evidence is thin: two claims from one source.\n\n"
+                    "## Source Appendix\n- Costco supplier information "
+                    "(src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+                claim_ids=["c1", "c2"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=_failing_source_fetcher,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    assert result.evidence_ledger is not None
+    assert [claim.id for claim in result.evidence_ledger.claims] == ["c1", "c2"]
+    assert synthesis_payload["allowed_claim_ids"] == ["c1", "c2"]
+    assert "r1" not in synthesis_payload["allowed_claim_ids"]
+    assert any(
+        "Deduplicated near-duplicate evidence claim ID r1" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+    assert "specialist_analyses" in synthesis_payload
+    assert "r1" in json.dumps(synthesis_payload["specialist_analyses"])
+    assert "Do not cite claim IDs from specialist_analyses" in json.dumps(
+        synthesis_payload["claim_reference_rules"]
+    )
+
+
+def test_full_qa_run_with_stale_claim_id_fails_before_qa_and_writes_diagnostic(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="c1",
+                        claim="Costco requires suppliers to meet delivery windows.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    ),
+                    EvidenceClaim(
+                        id="c2",
+                        claim="Costco requires suppliers to provide accurate item data.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="supplier_context",
+                    ),
+                ]
+            )
+        if agent_key == "news":
+            return SpecialistAnalysis(
+                specialist="news",
+                summary="News analysis repeats final-ledger evidence.",
+                evidence_claims=[
+                    EvidenceClaim(
+                        id="r1",
+                        claim="Costco requires suppliers to meet delivery windows.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ],
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key in {"competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary. [r1]\n\n"
+                    "## Context for Meeting\nContext. [c1]\n\n"
+                    "## What We Know\n"
+                    "- Costco requires suppliers to meet delivery windows. [r1]\n"
+                    "- Costco requires suppliers to provide accurate item data. [c2]\n\n"
+                    "## What We Do Not Know\n- Category-specific requirements.\n\n"
+                    "## Supplier/Buyer Angle\nCaveated angle. [c2]\n\n"
+                    "## Questions to Ask\n- Which supplier category matters?\n\n"
+                    "## Risks and Watchouts\n- Supplier requirements need validation. [c1]\n\n"
+                    "## Evidence Limitations\n"
+                    "- Evidence is thin: two claims from one source.\n\n"
+                    "## Source Appendix\n- Costco supplier information "
+                    "(src_costco_primary)\n\n"
+                    "Claim IDs cited: c1, c2, r1\n"
+                ),
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "qa":
+            raise AssertionError("QA should not run after pre-QA traceability failure.")
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=_failing_source_fetcher,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert calls == ["intake", "planner", "source_discovery", "evidence_extraction", "news", "competitor", "risk", "synthesis"]
+    assert result.metadata.status == "draft_needs_revision"
+    assert result.qa_review is None
+    assert result.report is not None
+    assert result.report.status == "draft_needs_revision"
+    assert [claim.id for claim in result.evidence_ledger.claims] == ["c1", "c2"]
+    assert (run_dir / "draft_report.md").exists()
+    assert (run_dir / "report_revision.md").exists()
+    assert not (run_dir / "qa_review.json").exists()
+    assert not (run_dir / "report.md").exists()
+    revision = (run_dir / "report_revision.md").read_text()
+    assert "Report contains unknown evidence claim references: r1" in revision
+    assert "QA was not run" in revision
+
+
+def test_full_qa_run_with_allowed_claim_ids_reaches_qa_normally(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="c1",
+                        claim="Costco requires suppliers to meet delivery windows.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    ),
+                    EvidenceClaim(
+                        id="c2",
+                        claim="Costco requires suppliers to provide accurate item data.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="supplier_context",
+                    ),
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary. [c1]\n\n"
+                    "## Context for Meeting\nContext. [c1]\n\n"
+                    "## What We Know\n"
+                    "- Costco requires suppliers to meet delivery windows. [c1]\n"
+                    "- Costco requires suppliers to provide accurate item data. [c2]\n\n"
+                    "## What We Do Not Know\n- Category-specific requirements.\n\n"
+                    "## Supplier/Buyer Angle\nCaveated angle. [c2]\n\n"
+                    "## Questions to Ask\n- Which supplier category matters?\n\n"
+                    "## Risks and Watchouts\n- Supplier requirements need validation. [c1]\n\n"
+                    "## Evidence Limitations\n"
+                    "- Evidence is thin: two claims from one source.\n\n"
+                    "## Source Appendix\n- Costco supplier information "
+                    "(src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+                claim_ids=["c1", "c2"],
+            )
+        if agent_key == "qa":
+            return QAReview(ready_to_publish=True, issues=[])
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=_failing_source_fetcher,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert calls[-1] == "qa"
+    assert result.metadata.status == "report_ready"
+    assert result.qa_review is not None
+    assert result.qa_review.issues == []
+    assert (run_dir / "qa_review.json").exists()
+    assert (run_dir / "report.md").exists()
+    assert not (run_dir / "report_revision.md").exists()
 
 
 def test_full_run_marks_markdown_source_reference_not_in_source_map_for_revision(

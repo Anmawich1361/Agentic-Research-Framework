@@ -66,6 +66,23 @@ def _ledger(claims: list[EvidenceClaim] | None = None) -> EvidenceLedger:
     )
 
 
+def _ledger_with_claim_ids(claim_ids: list[str]) -> EvidenceLedger:
+    return EvidenceLedger(
+        claims=[
+            EvidenceClaim(
+                id=claim_id,
+                claim=f"Costco evidence claim {claim_id}.",
+                claim_type="fact",
+                source_id="src_costco_primary",
+                source_url="https://example.com/vendor",
+                confidence="medium",
+                report_section="what_we_know",
+            )
+            for claim_id in claim_ids
+        ]
+    )
+
+
 def _report(markdown: str, *, source_ids: list[str] | None = None) -> Report:
     return Report(
         title="Costco Meeting Prep",
@@ -175,5 +192,21 @@ def test_traceability_rejects_unknown_claim_and_source_references() -> None:
         validate_report_traceability(
             report,
             evidence_ledger=_ledger(),
+            source_map=_source_map(),
+        )
+
+
+def test_traceability_rejects_stale_short_markdown_claim_ids() -> None:
+    report = _report(
+        "# Draft\n\n"
+        "## Executive Summary\n"
+        "Costco operates internationally. [r1]\n",
+        source_ids=["src_costco_primary"],
+    )
+
+    with pytest.raises(ReportSectionValidationError, match="r1"):
+        validate_report_traceability(
+            report,
+            evidence_ledger=_ledger_with_claim_ids(["c1", "c2"]),
             source_map=_source_map(),
         )

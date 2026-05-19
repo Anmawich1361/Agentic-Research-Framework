@@ -930,6 +930,59 @@ def _source_id_count(evidence_ledger: EvidenceLedgerModel) -> int:
     )
 
 
+def _allowed_claim_ids(evidence_ledger: EvidenceLedgerModel) -> list[str]:
+    return [claim.id for claim in evidence_ledger.claims]
+
+
+def _claim_reference_rules(evidence_ledger: EvidenceLedgerModel) -> list[str]:
+    allowed_count = len(evidence_ledger.claims)
+    return [
+        "Every material factual report statement must cite a claim ID from "
+        "allowed_claim_ids in [claim_id] form.",
+        "Use only allowed_claim_ids; do not invent, reuse, or restore dropped "
+        "claim IDs.",
+        "Do not cite claim IDs from specialist_analyses unless that exact ID "
+        "is present in allowed_claim_ids.",
+        "If a point would require a missing claim ID, omit it or rephrase it "
+        "as an open question or evidence gap.",
+        "Populate claim_ids with every allowed claim ID cited in markdown.",
+        f"The final evidence ledger currently contains {allowed_count} allowed claim IDs.",
+    ]
+
+
+def _report_revision_markdown(
+    *,
+    error: ReportSectionValidationError,
+    evidence_ledger: EvidenceLedgerModel,
+) -> str:
+    allowed_claim_lines = "\n".join(
+        f"- {claim_id}" for claim_id in _allowed_claim_ids(evidence_ledger)
+    )
+    return (
+        "# Draft Revision Required\n\n"
+        "QA was not run because deterministic pre-QA report validation failed.\n"
+        "No final report was written.\n\n"
+        "## Validation Error\n"
+        f"- {error}\n\n"
+        "## Allowed Claim IDs\n"
+        f"{allowed_claim_lines or '- None'}\n"
+    )
+
+
+def _write_report_revision_artifact(
+    run_dir: Path,
+    *,
+    error: ReportSectionValidationError,
+    evidence_ledger: EvidenceLedgerModel,
+    run_logger: RunLogger | None = None,
+) -> None:
+    _write_logged_text_artifact(
+        run_dir / "report_revision.md",
+        _report_revision_markdown(error=error, evidence_ledger=evidence_ledger),
+        run_logger,
+    )
+
+
 def _section_fill_lines(
     section: str,
     *,
@@ -1392,6 +1445,7 @@ def _continue_research_impl(
             "research_plan": plan.model_dump(mode="json"),
             "source_map": source_map.model_dump(mode="json"),
             "evidence_ledger": evidence_ledger.model_dump(mode="json"),
+            "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
             "specialist_analyses": [
                 analysis.model_dump(mode="json") for analysis in specialist_analyses
             ],
@@ -1417,10 +1471,12 @@ def _continue_research_impl(
                 "Use only source IDs from source_map. Include Source IDs and URLs "
                 "in the Source Appendix."
             ),
+            "claim_reference_rules": _claim_reference_rules(evidence_ledger),
             "claim_reference_rule": (
-                "Every material factual report statement must cite an evidence "
-                "ledger claim ID in [claim_id] form. Populate claim_ids with every "
-                "claim ID cited in markdown."
+                "Use only IDs in allowed_claim_ids. Every material factual report "
+                "statement must cite an allowed evidence ledger claim ID in "
+                "[claim_id] form. Populate claim_ids with every allowed claim ID "
+                "cited in markdown."
             ),
             "output_schema": "Report",
         }
@@ -1455,22 +1511,15 @@ def _continue_research_impl(
                 evidence_ledger=evidence_ledger,
                 source_map=source_map,
             )
-        except ReportSectionValidationError:
+        except ReportSectionValidationError as exc:
             report = report.model_copy(update={"status": "draft_needs_revision"})
-            if qa:
-                qa_review = run_deterministic_qa_checks(
-                    source_map=source_map,
-                    evidence_ledger=evidence_ledger,
-                    draft_report=report,
-                    template_name=template_name,
-                )
-                status = (
-                    "needs_review"
-                    if has_high_severity_issues(qa_review)
-                    else "draft_needs_revision"
-                )
-            else:
-                status = "draft_needs_revision"
+            _write_report_revision_artifact(
+                run_dir,
+                error=exc,
+                evidence_ledger=evidence_ledger,
+                run_logger=run_logger,
+            )
+            status = "draft_needs_revision"
         else:
             if qa:
                 run_logger.stage_start("qa")
@@ -1887,6 +1936,7 @@ def _run_research_impl(
                 "research_plan": plan.model_dump(mode="json"),
                 "source_map": source_map.model_dump(mode="json"),
                 "evidence_ledger": evidence_ledger.model_dump(mode="json"),
+                "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
                 "specialist_analyses": [
                     analysis.model_dump(mode="json") for analysis in specialist_analyses
                 ],
@@ -1909,10 +1959,12 @@ def _run_research_impl(
                     "Use only source IDs from source_map. Include Source IDs and URLs "
                     "in the Source Appendix."
                 ),
+                "claim_reference_rules": _claim_reference_rules(evidence_ledger),
                 "claim_reference_rule": (
-                    "Every material factual report statement must cite an evidence "
-                    "ledger claim ID in [claim_id] form. Populate claim_ids with every "
-                    "claim ID cited in markdown."
+                    "Use only IDs in allowed_claim_ids. Every material factual report "
+                    "statement must cite an allowed evidence ledger claim ID in "
+                    "[claim_id] form. Populate claim_ids with every allowed claim ID "
+                    "cited in markdown."
                 ),
                 "output_schema": "Report",
             }
@@ -1947,22 +1999,15 @@ def _run_research_impl(
                     evidence_ledger=evidence_ledger,
                     source_map=source_map,
                 )
-            except ReportSectionValidationError:
+            except ReportSectionValidationError as exc:
                 report = report.model_copy(update={"status": "draft_needs_revision"})
-                if qa:
-                    qa_review = run_deterministic_qa_checks(
-                        source_map=source_map,
-                        evidence_ledger=evidence_ledger,
-                        draft_report=report,
-                        template_name=template_name,
-                    )
-                    status = (
-                        "needs_review"
-                        if has_high_severity_issues(qa_review)
-                        else "draft_needs_revision"
-                    )
-                else:
-                    status = "draft_needs_revision"
+                _write_report_revision_artifact(
+                    run_dir,
+                    error=exc,
+                    evidence_ledger=evidence_ledger,
+                    run_logger=run_logger,
+                )
+                status = "draft_needs_revision"
             else:
                 if qa:
                     run_logger.stage_start("qa")

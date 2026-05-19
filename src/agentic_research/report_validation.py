@@ -67,7 +67,11 @@ GENERIC_REQUIRED_SECTIONS = [
 THIN_EVIDENCE_MIN_CLAIMS = 3
 THIN_EVIDENCE_MIN_SOURCE_IDS = 2
 
-_BRACKET_REFERENCE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]*)\]")
+_BRACKET_REFERENCE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]*)\](?!\()")
+_CLAIM_IDS_FOOTER_RE = re.compile(r"(?im)^Claim IDs cited:\s*(.+)$")
+_LIKELY_CLAIM_ID_RE = re.compile(
+    r"^(?:claim_[A-Za-z0-9_-]+|specialist_[A-Za-z0-9_-]+|[A-Za-z]+\d+)$"
+)
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SOURCE_ID_REFERENCE_RE = re.compile(r"\b(src_[A-Za-z0-9_-]+)\b")
 _BROAD_UNSUPPORTED_MARKERS = (
@@ -199,10 +203,15 @@ def missing_report_sections(
 
 def markdown_claim_references(markdown: str, known_claim_ids: set[str]) -> set[str]:
     references = set(_BRACKET_REFERENCE_RE.findall(markdown))
+    for footer_match in _CLAIM_IDS_FOOTER_RE.findall(markdown):
+        references.update(
+            reference.strip().strip(".,;")
+            for reference in re.split(r"[\s,]+", footer_match)
+        )
     return {
         reference
         for reference in references
-        if reference in known_claim_ids or reference.startswith("claim_")
+        if reference in known_claim_ids or _LIKELY_CLAIM_ID_RE.match(reference)
     }
 
 

@@ -9,6 +9,9 @@ Generate a clear markdown report using the selected template.
 ## Rules
 
 - Use the evidence ledger as the factual base.
+- Cite only claim IDs listed in `allowed_claim_ids`; this list is derived from the final evidence ledger after deduplication, evidence-quality filtering, renaming, and specialist merge.
+- Do not cite claim IDs from `specialist_analyses` unless the same ID exists in `allowed_claim_ids`.
+- If a useful point would require a missing claim ID, omit it or rephrase it as an open question or evidence gap.
 - Prefer source-content excerpts in the evidence ledger over search snippets or source metadata.
 - Do not introduce material factual claims that are not in the evidence ledger or source map.
 - Follow the selected template exactly. Use the required section names in `required_sections` without renaming, merging, or adding generic substitutes.
