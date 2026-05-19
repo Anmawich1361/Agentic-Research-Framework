@@ -231,6 +231,54 @@ agentic-research-framework/
 
 ## Local setup
 
+Use the Makefile workflow so the `src/` layout is installed correctly and the
+`arf` console script is verified.
+
+First-time setup:
+
+```bash
+make reset-env
+make doctor
+make check
+```
+
+After switching branches:
+
+```bash
+make setup
+make doctor
+```
+
+If `ModuleNotFoundError: No module named 'agentic_research'` appears, rebuild
+the local environment:
+
+```bash
+make reset-env
+make doctor
+```
+
+Run the deterministic CLI smoke test:
+
+```bash
+make smoke-mock
+```
+
+For live checkpoint smoke testing, copy `.env.example` to `.env`, add
+`OPENAI_API_KEY` manually, and run:
+
+```bash
+make smoke-live-checkpoint
+```
+
+See `docs/LOCAL_DEVELOPMENT.md` for the full local setup, diagnosis, and
+validation workflow.
+
+The package uses a `src/` layout (`src/agentic_research/`), so local development
+should use the editable install from `make setup` or `make reset-env` instead of
+relying on `PYTHONPATH=src`.
+
+Legacy manual setup commands:
+
 ```bash
 mkdir agentic-research-framework
 cd agentic-research-framework
