@@ -116,6 +116,62 @@ def test_evidence_ledger_validates_fact_sources_and_authority_floor() -> None:
     assert any("claim_low_authority" in warning and "low-authority" in warning for warning in warnings)
 
 
+def test_evidence_ledger_detects_duplicate_claim_ids() -> None:
+    claim = EvidenceClaim(
+        id="claim_duplicate",
+        claim="ExampleCo describes its product portfolio.",
+        claim_type="fact",
+        source_id="src_primary",
+        source_url="https://example.com/company",
+        confidence="medium",
+        report_section="overview",
+    )
+    ledger = EvidenceLedger([claim, claim])
+
+    warnings = ledger.validate(source_map=_source_map())
+
+    assert any(
+        "claim_duplicate" in warning
+        and "duplicate evidence claim id" in warning
+        and "identical claim/source content" in warning
+        for warning in warnings
+    )
+
+
+def test_evidence_ledger_detects_conflicting_duplicate_claim_ids() -> None:
+    ledger = EvidenceLedger(
+        [
+            EvidenceClaim(
+                id="claim_conflict",
+                claim="ExampleCo sells workflow software.",
+                claim_type="fact",
+                source_id="src_primary",
+                source_url="https://example.com/company",
+                confidence="medium",
+                report_section="overview",
+            ),
+            EvidenceClaim(
+                id="claim_conflict",
+                claim="ExampleCo has a durable category advantage.",
+                claim_type="inference",
+                source_id="src_blog",
+                source_url="https://example.com/blog",
+                confidence="medium",
+                report_section="analysis",
+            ),
+        ]
+    )
+
+    warnings = ledger.validate(source_map=_source_map())
+
+    assert any(
+        "claim_conflict" in warning
+        and "duplicate evidence claim id" in warning
+        and "conflicting claim/source content" in warning
+        for warning in warnings
+    )
+
+
 def test_report_generation_gate_fails_on_unsupported_claims() -> None:
     ledger = EvidenceLedger(
         [

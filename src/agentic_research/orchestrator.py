@@ -18,7 +18,11 @@ from agentic_research.agents import (
     get_agent_output_type,
     run_agent_sync,
 )
-from agentic_research.evidence_ledger import EvidenceLedger, raise_if_report_has_unsupported_claims
+from agentic_research.evidence_ledger import (
+    EvidenceLedger,
+    evidence_claim_content_key,
+    raise_if_report_has_unsupported_claims,
+)
 from agentic_research.models import (
     Confidence,
     EvidenceClaim,
@@ -74,6 +78,10 @@ class ResearchRunResult(BaseModel):
 
 
 AgentRunner = Callable[[str, Any, str], Any]
+_NON_BLOCKING_EVIDENCE_WARNING_PREFIXES = (
+    "Deduplicated duplicate evidence claim ID ",
+    "Renamed conflicting specialist evidence claim ID ",
+)
 
 
 def _new_run_id() -> str:
@@ -142,6 +150,7 @@ def _write_checkpoint_artifacts(
         write_json_artifact(run_dir / "specialist_analyses.json", specialist_analyses)
     if evidence_ledger is not None:
         write_json_artifact(run_dir / "evidence_ledger.json", evidence_ledger)
+    _write_evidence_review_artifact(run_dir, evidence_ledger, status=status)
     draft_report_path = None
     report_path = None
     if report is not None:
@@ -175,6 +184,51 @@ def _source_scores_by_id(source_map: SourceMap) -> dict[str, Any]:
     return {score.source_id: score for score in source_map.scores}
 
 
+def _is_blocking_evidence_warning(warning: str) -> bool:
+    return not warning.startswith(_NON_BLOCKING_EVIDENCE_WARNING_PREFIXES)
+
+
+def _has_blocking_evidence_warnings(evidence_ledger: EvidenceLedgerModel) -> bool:
+    return any(
+        _is_blocking_evidence_warning(warning)
+        for warning in evidence_ledger.validation_warnings
+    )
+
+
+def _evidence_review_markdown(evidence_ledger: EvidenceLedgerModel) -> str:
+    blocking_warnings = [
+        warning
+        for warning in evidence_ledger.validation_warnings
+        if _is_blocking_evidence_warning(warning)
+    ]
+    warning_lines = "\n".join(f"- {warning}" for warning in blocking_warnings)
+    return (
+        "# Evidence Review Required\n\n"
+        "Synthesis and QA were not run because evidence validation produced "
+        "blocking warnings.\n\n"
+        "## Blocking Warnings\n"
+        f"{warning_lines or '- None'}\n"
+    )
+
+
+def _write_evidence_review_artifact(
+    run_dir: Path,
+    evidence_ledger: EvidenceLedgerModel | None,
+    *,
+    status: str,
+) -> None:
+    if (
+        status != "evidence_needs_review"
+        or evidence_ledger is None
+        or not _has_blocking_evidence_warnings(evidence_ledger)
+    ):
+        return
+    (run_dir / "evidence_review.md").write_text(
+        _evidence_review_markdown(evidence_ledger),
+        encoding="utf-8",
+    )
+
+
 def _approved_sources(source_map: SourceMap) -> list[SourceCandidate]:
     score_lookup = _source_scores_by_id(source_map)
     included = [
@@ -187,6 +241,85 @@ def _approved_sources(source_map: SourceMap) -> list[SourceCandidate]:
     ordered_ids = [score.source_id for score in source_map.scores[:5]]
     source_lookup = {source.id: source for source in source_map.sources}
     return [source_lookup[source_id] for source_id in ordered_ids if source_id in source_lookup]
+
+
+def _claim_id_part(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
+    return normalized or "claim"
+
+
+def _next_specialist_claim_id(
+    *,
+    specialist: str,
+    original_id: str,
+    used_ids: set[str],
+) -> str:
+    prefix = _claim_id_part(specialist).lower()
+    claim_part = _claim_id_part(original_id)
+    candidate = f"specialist_{prefix}_{claim_part}"
+    suffix = 2
+    while candidate in used_ids:
+        candidate = f"specialist_{prefix}_{claim_part}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _deduplicate_claims(
+    base_claims: list[EvidenceClaim],
+    specialist_analyses: list[SpecialistAnalysis] | None = None,
+) -> tuple[list[EvidenceClaim], list[str]]:
+    deduped_claims: list[EvidenceClaim] = []
+    warnings: list[str] = []
+    used_ids: set[str] = set()
+    first_content_by_id: dict[str, tuple[str, ...]] = {}
+
+    claims_with_origin: list[tuple[EvidenceClaim, str | None]] = [
+        (claim, None) for claim in base_claims
+    ]
+    for analysis in specialist_analyses or []:
+        claims_with_origin.extend(
+            (claim, analysis.specialist) for claim in analysis.evidence_claims
+        )
+
+    for claim, specialist in claims_with_origin:
+        content_key = evidence_claim_content_key(claim)
+        first_content_key = first_content_by_id.get(claim.id)
+        if first_content_key is None:
+            deduped_claims.append(claim)
+            used_ids.add(claim.id)
+            first_content_by_id[claim.id] = content_key
+            continue
+
+        if content_key == first_content_key:
+            warnings.append(
+                f"Deduplicated duplicate evidence claim ID {claim.id}: preserved "
+                "the first occurrence and dropped a later identical claim."
+            )
+            continue
+
+        if specialist is not None:
+            new_id = _next_specialist_claim_id(
+                specialist=specialist,
+                original_id=claim.id,
+                used_ids=used_ids,
+            )
+            deduped_claims.append(claim.model_copy(update={"id": new_id}))
+            used_ids.add(new_id)
+            first_content_by_id[new_id] = content_key
+            warnings.append(
+                f"Renamed conflicting specialist evidence claim ID {claim.id} "
+                f"to {new_id}: claim/source content differed from the first "
+                "occurrence."
+            )
+            continue
+
+        warnings.append(
+            f"Conflicting duplicate evidence claim ID {claim.id}: claim/source "
+            "content differs from the first occurrence; preserved the first "
+            "occurrence and blocked synthesis until unique IDs are supplied."
+        )
+
+    return deduped_claims, warnings
 
 
 def _extract_mock_evidence(
@@ -222,12 +355,14 @@ def _extract_mock_evidence(
 
 
 def _validate_evidence(
-    claims: list[Any],
+    claims: list[EvidenceClaim],
     *,
     source_map: SourceMap,
 ) -> EvidenceLedgerModel:
-    ledger = EvidenceLedger(claims)
+    deduped_claims, dedupe_warnings = _deduplicate_claims(claims)
+    ledger = EvidenceLedger(deduped_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
+    ledger.validation_warnings = [*dedupe_warnings, *ledger.validation_warnings]
     return ledger.to_model()
 
 
@@ -297,17 +432,21 @@ def _merge_specialist_claims(
     *,
     source_map: SourceMap,
 ) -> EvidenceLedgerModel:
-    specialist_claims = [
-        claim
-        for analysis in specialist_analyses
-        for claim in analysis.evidence_claims
-    ]
-    if not specialist_claims:
+    if not any(analysis.evidence_claims for analysis in specialist_analyses):
         return evidence_ledger
-    return _validate_evidence(
-        [*evidence_ledger.claims, *specialist_claims],
-        source_map=source_map,
+    deduped_claims, dedupe_warnings = _deduplicate_claims(
+        evidence_ledger.claims,
+        specialist_analyses,
     )
+    existing_warnings = list(evidence_ledger.validation_warnings)
+    ledger = EvidenceLedger(deduped_claims)
+    ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
+    ledger.validation_warnings = [
+        *existing_warnings,
+        *dedupe_warnings,
+        *ledger.validation_warnings,
+    ]
+    return ledger.to_model()
 
 
 _BRACKET_REFERENCE_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]*)\]")
@@ -556,7 +695,8 @@ def run_research(
                 source_map=source_map,
                 evidence_ledger=evidence_ledger,
             )
-            if evidence_ledger is not None and not evidence_ledger.validation_warnings
+            if evidence_ledger is not None
+            and not _has_blocking_evidence_warnings(evidence_ledger)
             else None
         )
         qa_review = (
@@ -597,7 +737,8 @@ def run_research(
                 else "draft_needs_qa"
                 if report is not None
                 else "evidence_needs_review"
-                if evidence_ledger is not None and evidence_ledger.validation_warnings
+                if evidence_ledger is not None
+                and _has_blocking_evidence_warnings(evidence_ledger)
                 else "evidence_ready"
                 if evidence_ledger is not None
                 else "checkpoint_ready"
@@ -706,8 +847,12 @@ def run_research(
             ),
         )
         evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
-        status = "evidence_needs_review" if evidence_ledger.validation_warnings else "evidence_ready"
-        if not evidence_ledger.validation_warnings:
+        status = (
+            "evidence_needs_review"
+            if _has_blocking_evidence_warnings(evidence_ledger)
+            else "evidence_ready"
+        )
+        if not _has_blocking_evidence_warnings(evidence_ledger):
             specialist_analyses = _run_specialist_analyses(
                 agents=agents,
                 charter=charter,
@@ -722,8 +867,12 @@ def run_research(
             specialist_analyses,
             source_map=source_map,
         )
-        status = "evidence_needs_review" if evidence_ledger.validation_warnings else "evidence_ready"
-        if not evidence_ledger.validation_warnings:
+        status = (
+            "evidence_needs_review"
+            if _has_blocking_evidence_warnings(evidence_ledger)
+            else "evidence_ready"
+        )
+        if not _has_blocking_evidence_warnings(evidence_ledger):
             template_name = select_report_template_name(charter)
             synthesis_payload = {
                 "charter": charter.model_dump(mode="json"),

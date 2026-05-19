@@ -48,6 +48,24 @@ def _sources_by_url(source_map: SourceMap | None) -> dict[str, SourceCandidate]:
     return sources
 
 
+def _normalized_text(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def evidence_claim_content_key(claim: EvidenceClaim) -> tuple[str, ...]:
+    return (
+        _normalized_text(claim.claim),
+        claim.claim_type,
+        claim.confidence,
+        _normalized_text(claim.report_section),
+        claim.source_id or "",
+        claim.source_title or "",
+        _normalize_url(claim.source_url) or "",
+        claim.source_type or "",
+        _normalized_text(claim.quote_or_excerpt),
+    )
+
+
 class EvidenceLedger:
     def __init__(self, claims: Iterable[EvidenceClaim] | None = None) -> None:
         self.claims = list(claims or [])
@@ -75,6 +93,27 @@ class EvidenceLedger:
             else {}
         )
         sources_by_normalized_url = _sources_by_url(source_map)
+        duplicate_positions: dict[str, list[int]] = {}
+        duplicate_content_keys: dict[str, set[tuple[str, ...]]] = {}
+        for index, claim in enumerate(self.claims, start=1):
+            duplicate_positions.setdefault(claim.id, []).append(index)
+            duplicate_content_keys.setdefault(claim.id, set()).add(
+                evidence_claim_content_key(claim)
+            )
+
+        for claim_id, positions in duplicate_positions.items():
+            if len(positions) <= 1:
+                continue
+            position_text = ", ".join(str(position) for position in positions)
+            content_description = (
+                "identical claim/source content"
+                if len(duplicate_content_keys[claim_id]) == 1
+                else "conflicting claim/source content"
+            )
+            warnings.append(
+                f"{claim_id}: duplicate evidence claim id appears {len(positions)} "
+                f"times at positions {position_text} with {content_description}."
+            )
 
         for claim in self.claims:
             if claim.claim_type == "fact" and not (claim.source_id or claim.source_url):
@@ -141,4 +180,8 @@ def raise_if_report_has_unsupported_claims(ledger: EvidenceLedger) -> None:
         raise ValueError(f"Cannot generate report with unsupported evidence claims: {warning_text}")
 
 
-__all__ = ["EvidenceLedger", "raise_if_report_has_unsupported_claims"]
+__all__ = [
+    "EvidenceLedger",
+    "evidence_claim_content_key",
+    "raise_if_report_has_unsupported_claims",
+]

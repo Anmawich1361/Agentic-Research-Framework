@@ -842,6 +842,337 @@ def test_specialist_claim_with_unknown_source_blocks_publication(tmp_path: Path)
     run_dir = tmp_path / result.metadata.run_id
     assert not (run_dir / "draft_report.md").exists()
     assert not (run_dir / "report.md").exists()
+    evidence_review = (run_dir / "evidence_review.md").read_text()
+    assert "Synthesis and QA were not run" in evidence_review
+
+
+def test_full_run_deduplicates_identical_claim_ids_before_synthesis(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    duplicate_claim = EvidenceClaim(
+        id="claim_costco_supplier",
+        claim="Costco publishes supplier information for vendors.",
+        claim_type="fact",
+        source_id="src_costco_primary",
+        source_title="Costco supplier information",
+        source_url="https://www.costco.com/suppliers.html",
+        source_type="primary_company",
+        confidence="medium",
+        report_section="overview",
+    )
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(claims=[duplicate_claim, duplicate_claim])
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis should stay source-bound.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            assert "claim_costco_supplier" in prompt
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary.\n\n"
+                    "## Key Findings\n"
+                    "- Costco publishes supplier information for vendors. "
+                    "[claim_costco_supplier]\n\n"
+                    "## Business Overview\nCostco supplier context.\n\n"
+                    "## Competitors\nRelevant alternatives need follow-up.\n\n"
+                    "## Risks\nPrimary-source bias.\n\n"
+                    "## Open Questions\nWhich supplier category should be prioritized?\n\n"
+                    "## Source Appendix\n- Costco supplier information (src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert "synthesis" in calls
+    assert result.metadata.status == "draft_needs_qa"
+    assert result.evidence_ledger is not None
+    assert [claim.id for claim in result.evidence_ledger.claims] == ["claim_costco_supplier"]
+    assert any(
+        "Deduplicated duplicate evidence claim ID claim_costco_supplier" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+    assert (run_dir / "draft_report.md").exists()
+    assert not (run_dir / "evidence_review.md").exists()
+    assert not (run_dir / "report.md").exists()
+
+
+def test_conflicting_base_duplicate_claim_ids_block_synthesis(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_conflict",
+                        claim="Costco publishes supplier information for vendors.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    ),
+                    EvidenceClaim(
+                        id="claim_conflict",
+                        claim="Costco has a durable supplier advantage.",
+                        claim_type="inference",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="supplier_context",
+                    ),
+                ]
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert calls == ["intake", "planner", "source_discovery", "evidence_extraction"]
+    assert result.metadata.status == "evidence_needs_review"
+    assert result.evidence_ledger is not None
+    assert [claim.id for claim in result.evidence_ledger.claims] == ["claim_conflict"]
+    assert any(
+        "Conflicting duplicate evidence claim ID claim_conflict" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+    evidence_review = (run_dir / "evidence_review.md").read_text()
+    assert "Conflicting duplicate evidence claim ID claim_conflict" in evidence_review
+    assert not (run_dir / "draft_report.md").exists()
+    assert not (run_dir / "qa_review.json").exists()
+    assert not (run_dir / "report.md").exists()
+
+
+def test_full_qa_run_renames_conflicting_specialist_duplicate_claim_ids(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_costco_supplier",
+                        claim="Costco publishes supplier information for vendors.",
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="overview",
+                    )
+                ]
+            )
+        if agent_key == "news":
+            return SpecialistAnalysis(
+                specialist="news",
+                summary="News analysis uses source-bound context.",
+                evidence_claims=[
+                    EvidenceClaim(
+                        id="claim_costco_supplier",
+                        claim="Costco supplier context should be checked against recent news.",
+                        claim_type="inference",
+                        source_id="src_costco_primary",
+                        source_title="Costco supplier information",
+                        source_url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        confidence="medium",
+                        report_section="supplier_context",
+                    )
+                ],
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key in {"competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis should stay source-bound.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            assert "specialist_news_claim_costco_supplier" in prompt
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\nEvidence-backed summary.\n\n"
+                    "## Key Findings\n"
+                    "- Costco publishes supplier information for vendors. "
+                    "[claim_costco_supplier]\n\n"
+                    "## Business Overview\nCostco supplier context.\n\n"
+                    "## Competitors\nRelevant alternatives need follow-up.\n\n"
+                    "## Risks\nPrimary-source bias.\n\n"
+                    "## Open Questions\nWhich supplier category should be prioritized?\n\n"
+                    "## Source Appendix\n- Costco supplier information (src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "qa":
+            return QAReview(ready_to_publish=True, issues=[])
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert result.metadata.status == "report_ready"
+    assert result.qa_review is not None
+    assert result.evidence_ledger is not None
+    claim_ids = [claim.id for claim in result.evidence_ledger.claims]
+    assert claim_ids == [
+        "claim_costco_supplier",
+        "specialist_news_claim_costco_supplier",
+    ]
+    assert len(claim_ids) == len(set(claim_ids))
+    assert any(
+        "Renamed conflicting specialist evidence claim ID claim_costco_supplier "
+        "to specialist_news_claim_costco_supplier" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+    assert calls[-1] == "qa"
+    assert (run_dir / "draft_report.md").exists()
+    assert (run_dir / "qa_review.json").exists()
+    assert (run_dir / "report.md").exists()
+    assert not (run_dir / "evidence_review.md").exists()
 
 
 def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path: Path) -> None:
