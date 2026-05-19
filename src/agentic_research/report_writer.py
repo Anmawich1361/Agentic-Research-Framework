@@ -58,9 +58,9 @@ def render_markdown_template(template: str, context: dict[str, Any]) -> str:
     return rendered
 
 
-def _bullets(items: list[str]) -> str:
+def _bullets(items: list[str], *, empty_text: str = "None identified in Phase 1 mock mode.") -> str:
     if not items:
-        return "- None identified in Phase 1 mock mode."
+        return f"- {empty_text}"
     return "\n".join(f"- {item}" for item in items)
 
 
@@ -86,8 +86,30 @@ def render_checkpoint(
     charter: ResearchCharter,
     plan: ResearchPlan,
     source_map: SourceMap,
+    *,
+    mock: bool = True,
 ) -> str:
     template = load_template("checkpoint.md")
+    if mock:
+        early_read = (
+            "Mock mode produced a deterministic source map for user steering. "
+            "No live research or model synthesis has been run."
+        )
+        recommended_direction = (
+            "Confirm the target, lens, source priorities, and missing context before "
+            "Phase 2 adds live agent checkpointing."
+        )
+        empty_gap_text = "None identified in Phase 1 mock mode."
+    else:
+        early_read = (
+            "Live checkpoint source map was built from discovered sources for user steering. "
+            "No report synthesis has been run."
+        )
+        recommended_direction = (
+            "Confirm the target, lens, source priorities, and missing context before deeper research."
+        )
+        empty_gap_text = "None identified at checkpoint."
+
     return render_markdown_template(
         template,
         {
@@ -100,15 +122,9 @@ def render_checkpoint(
             "deliverable": charter.deliverable,
             "research_questions": _bullets(plan.research_questions),
             "source_map": _format_source_map(source_map),
-            "early_read": (
-                "Mock mode produced a deterministic source map for user steering. "
-                "No live research or model synthesis has been run."
-            ),
-            "gaps_and_caveats": _bullets(source_map.gaps + plan.data_gaps),
-            "recommended_direction": (
-                "Confirm the target, lens, source priorities, and missing context before "
-                "Phase 2 adds live agent checkpointing."
-            ),
+            "early_read": early_read,
+            "gaps_and_caveats": _bullets(source_map.gaps + plan.data_gaps, empty_text=empty_gap_text),
+            "recommended_direction": recommended_direction,
             "checkpoint_questions": _bullets(plan.checkpoint_questions),
         },
     )
@@ -119,9 +135,14 @@ def write_checkpoint(
     charter: ResearchCharter,
     plan: ResearchPlan,
     source_map: SourceMap,
+    *,
+    mock: bool = True,
 ) -> Path:
     checkpoint_path = run_dir / "checkpoint.md"
-    checkpoint_path.write_text(render_checkpoint(charter, plan, source_map), encoding="utf-8")
+    checkpoint_path.write_text(
+        render_checkpoint(charter, plan, source_map, mock=mock),
+        encoding="utf-8",
+    )
     return checkpoint_path
 
 

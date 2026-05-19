@@ -152,7 +152,7 @@ def _write_checkpoint_artifacts(
         )
     if qa_review is not None:
         write_json_artifact(run_dir / "qa_review.json", qa_review)
-    checkpoint_path = write_checkpoint(run_dir, charter, plan, source_map)
+    checkpoint_path = write_checkpoint(run_dir, charter, plan, source_map, mock=mock)
 
     return ResearchRunResult(
         metadata=metadata,
@@ -451,7 +451,11 @@ def run_research(
         charter = create_mock_charter(request, mode=mode, lens=lens)
         plan = create_mock_plan(charter)
         sources = discover_mock_sources(charter)
-        source_map = build_source_map(sources, required_source_types=plan.required_source_types)
+        source_map = build_source_map(
+            sources,
+            required_source_types=plan.required_source_types,
+            mock=True,
+        )
         selected_specialists = select_specialists(charter, plan)
         mock_specialist_analyses = (
             build_mock_specialist_analyses(
@@ -581,7 +585,11 @@ def run_research(
         ),
     )
     sources = list(source_discovery.sources)
-    source_map = build_source_map(sources, required_source_types=plan.required_source_types)
+    source_map = build_source_map(
+        sources,
+        required_source_types=plan.required_source_types,
+        mock=False,
+    )
     if source_discovery.gaps:
         source_map.gaps.extend(source_discovery.gaps)
 

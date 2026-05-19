@@ -7,6 +7,122 @@ from agentic_research.models import SourceCandidate, SourceMap, SourceScore
 from agentic_research.settings import load_yaml_config
 
 
+SOURCE_NEED_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "corporate_filing",
+        (
+            "10-k",
+            "10 k",
+            "10q",
+            "10-q",
+            "annual report",
+            "form 10",
+            "sec filing",
+            "filing",
+        ),
+    ),
+    (
+        "investor_material",
+        (
+            "investor presentation",
+            "investor presentations",
+            "investor material",
+            "investor materials",
+            "shareholder",
+            "investor day",
+        ),
+    ),
+    (
+        "primary_company",
+        (
+            "company website",
+            "company site",
+            "website",
+            "supplier",
+            "vendor",
+            "product page",
+        ),
+    ),
+    (
+        "earnings_transcript",
+        (
+            "earnings transcript",
+            "earnings call",
+            "quarterly call",
+            "transcript",
+        ),
+    ),
+    (
+        "trade_publication",
+        (
+            "trade publication",
+            "trade publications",
+            "trade news",
+            "merchandising",
+            "category-level",
+            "category level",
+        ),
+    ),
+    (
+        "industry_primer",
+        (
+            "industry report",
+            "industry primer",
+            "market primer",
+            "market report",
+            "association report",
+            "consulting report",
+        ),
+    ),
+    (
+        "competitor_source",
+        (
+            "competitor website",
+            "competitor source",
+            "competitor sources",
+            "competitive source",
+        ),
+    ),
+    (
+        "government_data",
+        (
+            "government data",
+            "government source",
+            "regulatory data",
+            "bls",
+            "census",
+            "fred",
+            "world bank",
+        ),
+    ),
+    (
+        "expert_blog",
+        (
+            "expert blog",
+            "analyst blog",
+            "newsletter",
+        ),
+    ),
+    (
+        "whitepaper",
+        (
+            "whitepaper",
+            "white paper",
+            "technical report",
+        ),
+    ),
+    (
+        "news",
+        (
+            "news",
+            "press coverage",
+            "media coverage",
+            "recent coverage",
+        ),
+    ),
+)
+
+
 def _source_taxonomy() -> dict[str, Any]:
     return load_yaml_config("source_taxonomy.yaml").get("source_types", {})
 
@@ -42,6 +158,37 @@ def recency_score(publication_date: str | None, as_of: date | None = None) -> in
     if age <= 5:
         return int(config.get("four_to_five_years_old", 2))
     return int(config.get("older_or_unknown", 1))
+
+
+def canonical_source_need(required_source_type: str) -> str:
+    normalized = " ".join(required_source_type.strip().lower().replace("_", " ").split())
+    source_types = set(_source_taxonomy())
+    canonical_candidate = normalized.replace(" ", "_")
+    if canonical_candidate in source_types:
+        return canonical_candidate
+
+    for canonical, aliases in SOURCE_NEED_ALIASES:
+        if any(alias in normalized for alias in aliases):
+            return canonical
+
+    return canonical_candidate
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _source_map_note(*, mock: bool) -> str:
+    if mock:
+        return "Deterministic mock source map. Mock mode does not perform live discovery."
+    return "Live checkpoint source map built from discovered sources."
 
 
 def _default_authority(source: SourceCandidate) -> int:
@@ -111,6 +258,7 @@ def build_source_map(
     *,
     required_source_types: list[str] | None = None,
     as_of: date | None = None,
+    mock: bool = True,
 ) -> SourceMap:
     scores = sorted(
         [score_source(source, as_of=as_of) for source in sources],
@@ -118,7 +266,9 @@ def build_source_map(
         reverse=True,
     )
 
-    required = required_source_types or []
+    required = _dedupe_preserving_order(
+        [canonical_source_need(source_type) for source_type in required_source_types or []]
+    )
     present_types = {source.source_type for source in sources}
     gaps = [
         f"Missing source type: {source_type}"
@@ -130,5 +280,5 @@ def build_source_map(
         sources=sources,
         scores=scores,
         gaps=gaps,
-        notes="Deterministic Phase 1 source map. Mock mode does not perform live discovery.",
+        notes=_source_map_note(mock=mock),
     )

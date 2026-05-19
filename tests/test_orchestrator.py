@@ -127,8 +127,13 @@ def test_live_checkpoint_run_uses_agents_and_writes_artifacts(tmp_path: Path) ->
 
     metadata = json.loads((tmp_path / result.metadata.run_id / "metadata.json").read_text())
     checkpoint = (tmp_path / result.metadata.run_id / "checkpoint.md").read_text()
+    source_map = json.loads((tmp_path / result.metadata.run_id / "source_map.json").read_text())
     assert metadata["mock"] is False
+    assert source_map["notes"] == "Live checkpoint source map built from discovered sources."
     assert "Research Checkpoint: Costco" in checkpoint
+    assert "Live checkpoint source map" in checkpoint
+    assert "Mock mode produced" not in checkpoint
+    assert "No live research" not in checkpoint
 
 
 def test_live_checkpoint_includes_mocked_search_results_in_source_agent_prompt(
