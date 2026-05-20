@@ -117,6 +117,39 @@ def _quality_source_map() -> SourceMap:
     )
 
 
+def _short_id_source_map() -> SourceMap:
+    sources = [
+        SourceCandidate(
+            id=source_id,
+            title=f"Costco source {source_id}",
+            publisher="Costco",
+            url=f"https://example.com/{source_id}",
+            source_type="primary_company",
+            bias_risk="medium",
+            relevance_rationale="Source appendix validation fixture.",
+            recommended_uses=["supplier meeting"],
+        )
+        for source_id in ["s1", "s2", "s4"]
+    ]
+    return SourceMap(
+        sources=sources,
+        scores=[
+            SourceScore(
+                source_id=source.id,
+                authority_score=4,
+                relevance_score=5,
+                recency_score=4,
+                coverage_score=4,
+                bias_risk="medium",
+                final_score=4.2,
+                include=True,
+            )
+            for source in sources
+        ],
+        gaps=[],
+    )
+
+
 def _ledger(claims: list[EvidenceClaim] | None = None) -> EvidenceLedger:
     return EvidenceLedger(
         claims=claims
@@ -131,6 +164,23 @@ def _ledger(claims: list[EvidenceClaim] | None = None) -> EvidenceLedger:
                 confidence="medium",
                 report_section="what_we_know",
                 quote_or_excerpt="Vendor Inquiries",
+            )
+        ]
+    )
+
+
+def _short_id_source_ledger() -> EvidenceLedger:
+    return EvidenceLedger(
+        claims=[
+            EvidenceClaim(
+                id="claim_1",
+                claim="Costco publishes vendor expectations.",
+                claim_type="fact",
+                source_id="s1",
+                source_url="https://example.com/s1",
+                confidence="medium",
+                report_section="what_we_know",
+                quote_or_excerpt="vendor expectations",
             )
         ]
     )
@@ -327,6 +377,27 @@ def test_traceability_rejects_unknown_claim_and_source_references() -> None:
         )
 
 
+def test_traceability_allows_short_source_ids_in_source_appendix() -> None:
+    report = _report(
+        "# Draft\n\n"
+        "## Executive Summary\n"
+        "Costco publishes vendor expectations. [claim_1]\n\n"
+        "## Source Appendix\n"
+        "- [s1] Costco source s1 — https://example.com/s1\n"
+        "- [s2] Costco source s2 — https://example.com/s2\n"
+        "- [s4] Costco source s4 — https://example.com/s4\n",
+        source_ids=["s1", "s2", "s4"],
+    )
+
+    validate_report_traceability(
+        report,
+        evidence_ledger=_short_id_source_ledger(),
+        source_map=_short_id_source_map(),
+    )
+
+    assert report.claim_ids == ["claim_1"]
+
+
 def test_traceability_rejects_stale_short_markdown_claim_ids() -> None:
     report = _report(
         "# Draft\n\n"
@@ -340,6 +411,24 @@ def test_traceability_rejects_stale_short_markdown_claim_ids() -> None:
             report,
             evidence_ledger=_ledger_with_claim_ids(["c1", "c2"]),
             source_map=_source_map(),
+        )
+
+
+def test_traceability_rejects_unknown_short_source_id_in_source_appendix() -> None:
+    report = _report(
+        "# Draft\n\n"
+        "## Executive Summary\n"
+        "Costco publishes vendor expectations. [claim_1]\n\n"
+        "## Source Appendix\n"
+        "- [s999] Unknown source — https://example.com/s999\n",
+        source_ids=["s1"],
+    )
+
+    with pytest.raises(ReportSectionValidationError, match="unknown source.*s999"):
+        validate_report_traceability(
+            report,
+            evidence_ledger=_short_id_source_ledger(),
+            source_map=_short_id_source_map(),
         )
 
 

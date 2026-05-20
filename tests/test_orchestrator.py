@@ -606,6 +606,12 @@ def test_live_checkpoint_failure_writes_failure_artifacts_and_no_final_report(
     run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
     assert len(run_dirs) == 1
     run_dir = run_dirs[0]
+    expected_files = {
+        "metadata.json",
+        "error.json",
+        "failure_report.md",
+        "run_log.jsonl",
+    }
     metadata = json.loads((run_dir / "metadata.json").read_text())
     error = json.loads((run_dir / "error.json").read_text())
     failure_report = (run_dir / "failure_report.md").read_text()
@@ -614,6 +620,7 @@ def test_live_checkpoint_failure_writes_failure_artifacts_and_no_final_report(
         for line in (run_dir / "run_log.jsonl").read_text().splitlines()
     ]
 
+    assert expected_files == {path.name for path in run_dir.iterdir() if path.is_file()}
     assert metadata["status"] == "failed"
     assert metadata["status_reason"] == "RuntimeError: planner failed intentionally"
     assert metadata["run_type"] == "checkpoint"
@@ -971,11 +978,27 @@ def test_full_run_without_qa_writes_draft_only_from_mocked_synthesis_output(
     assert "selected_report_template" in synthesis_prompt
 
     run_dir = tmp_path / result.metadata.run_id
+    expected_files = {
+        "metadata.json",
+        "charter.json",
+        "research_plan.json",
+        "sources.json",
+        "source_map.json",
+        "source_content.json",
+        "source_fetch_log.json",
+        "specialist_analyses.json",
+        "evidence_ledger.json",
+        "draft_report.md",
+        "checkpoint.md",
+        "artifact_review.md",
+        "run_log.jsonl",
+    }
     evidence_ledger = json.loads((run_dir / "evidence_ledger.json").read_text())
     source_content = json.loads((run_dir / "source_content.json").read_text())
     source_fetch_log = json.loads((run_dir / "source_fetch_log.json").read_text())
     draft_report = (run_dir / "draft_report.md").read_text()
     artifact_review = (run_dir / "artifact_review.md").read_text()
+    assert expected_files == {path.name for path in run_dir.iterdir() if path.is_file()}
     assert evidence_ledger["claims"][0]["id"] == "claim_servicetitan_overview"
     assert source_content[0]["source_id"] == "src_servicetitan_primary"
     assert "Costco requires suppliers to meet delivery windows." in source_content[0]["text"]
@@ -1893,6 +1916,22 @@ def test_specialist_claim_with_unknown_source_blocks_publication(tmp_path: Path)
     )
 
     run_dir = tmp_path / result.metadata.run_id
+    expected_files = {
+        "metadata.json",
+        "charter.json",
+        "research_plan.json",
+        "sources.json",
+        "source_map.json",
+        "source_content.json",
+        "source_fetch_log.json",
+        "specialist_analyses.json",
+        "evidence_ledger.json",
+        "evidence_review.md",
+        "checkpoint.md",
+        "artifact_review.md",
+        "run_log.jsonl",
+    }
+    assert expected_files == {path.name for path in run_dir.iterdir() if path.is_file()}
     assert not (run_dir / "draft_report.md").exists()
     assert not (run_dir / "report.md").exists()
     evidence_review = (run_dir / "evidence_review.md").read_text()
@@ -2379,6 +2418,23 @@ def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path
     )
 
     run_dir = tmp_path / result.metadata.run_id
+    expected_files = {
+        "metadata.json",
+        "charter.json",
+        "research_plan.json",
+        "sources.json",
+        "source_map.json",
+        "source_content.json",
+        "source_fetch_log.json",
+        "specialist_analyses.json",
+        "evidence_ledger.json",
+        "draft_report.md",
+        "qa_review.json",
+        "checkpoint.md",
+        "artifact_review.md",
+        "run_log.jsonl",
+    }
+    assert expected_files == {path.name for path in run_dir.iterdir() if path.is_file()}
     assert (run_dir / "draft_report.md").exists()
     assert not (run_dir / "report.md").exists()
     artifact_review = (run_dir / "artifact_review.md").read_text()
