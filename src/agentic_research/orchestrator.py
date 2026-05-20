@@ -60,6 +60,7 @@ from agentic_research.report_validation import (
 )
 from agentic_research.run_logging import RunLogger
 from agentic_research.run_artifacts import (
+    EMPTY_EVIDENCE_WARNING,
     ResearchRunResult,
     has_blocking_evidence_warnings as _has_blocking_evidence_warnings,
     write_checkpoint_artifacts as _write_checkpoint_artifacts,
@@ -521,9 +522,11 @@ def _validate_evidence(
     )
     ledger = EvidenceLedger(sanitized_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
+    sufficiency_warnings = [] if ledger.claims else [EMPTY_EVIDENCE_WARNING]
     ledger.validation_warnings = [
         *dedupe_warnings,
         *sanitization_warnings,
+        *sufficiency_warnings,
         *ledger.validation_warnings,
     ]
     return ledger.to_model()

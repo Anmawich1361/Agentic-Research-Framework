@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from agentic_research.models import EvidenceClaim, EvidenceLedger
+from agentic_research.models import (
+    EvidenceClaim,
+    EvidenceLedger,
+    SourceChunk,
+    SourceContent,
+    SourceFetchLog,
+    SourceFetchResult,
+)
 from agentic_research.run_artifacts import (
+    evidence_review_markdown,
     failure_report_markdown,
     has_blocking_evidence_warnings,
     report_revision_markdown,
@@ -49,6 +57,88 @@ def test_has_blocking_evidence_warnings_ignores_known_non_blocking_warnings() ->
     )
 
     assert has_blocking_evidence_warnings(blocking_ledger)
+
+
+def test_evidence_review_markdown_explains_empty_claims_with_fetched_content() -> None:
+    ledger = EvidenceLedger(
+        validation_warnings=[
+            "No valid evidence claims were extracted from approved sources.",
+        ]
+    )
+    source_content = [
+        SourceContent(
+            source_id="s1",
+            url="https://example.com/source",
+            content_type="text/html",
+            title="Costco source",
+            text="Costco supplier content.",
+            excerpt="Costco supplier content.",
+            chunks=[
+                SourceChunk(
+                    source_id="s1",
+                    url="https://example.com/source",
+                    chunk_id="s1_chunk_1",
+                    index=0,
+                    text="Costco supplier content.",
+                )
+            ],
+        )
+    ]
+
+    markdown = evidence_review_markdown(
+        ledger,
+        source_content=source_content,
+        source_fetch_log=SourceFetchLog(
+            results=[
+                SourceFetchResult(
+                    source_id="s1",
+                    url="https://example.com/source",
+                    status="fetched",
+                    text_char_count=24,
+                    chunk_count=1,
+                )
+            ]
+        ),
+    )
+
+    assert "No valid evidence claims were extracted from approved sources." in markdown
+    assert "Fetched source content exists for 1 source" in markdown
+    assert "evidence extraction prompt/source chunks" in markdown
+    assert "Synthesis and QA were skipped" in markdown
+
+
+def test_evidence_review_markdown_explains_empty_claims_without_fetched_content() -> None:
+    ledger = EvidenceLedger(
+        validation_warnings=[
+            "No valid evidence claims were extracted from approved sources.",
+        ]
+    )
+
+    markdown = evidence_review_markdown(
+        ledger,
+        source_content=[],
+        source_fetch_log=SourceFetchLog(
+            results=[
+                SourceFetchResult(
+                    source_id="s1",
+                    url="https://example.com/source",
+                    status="failed",
+                    error="timeout",
+                ),
+                SourceFetchResult(
+                    source_id="s2",
+                    url="https://example.com/source-2",
+                    status="skipped",
+                    error="PDF ingestion is not implemented.",
+                ),
+            ]
+        ),
+    )
+
+    assert "No valid evidence claims were extracted from approved sources." in markdown
+    assert "No source content was fetched" in markdown
+    assert "source discovery/source ingestion" in markdown
+    assert "Fetch results: 0 fetched, 1 failed, 1 skipped" in markdown
 
 
 def test_report_revision_markdown_uses_final_evidence_claim_ids() -> None:
