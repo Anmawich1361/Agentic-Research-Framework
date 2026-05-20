@@ -1605,6 +1605,85 @@ def test_full_qa_run_with_stale_claim_id_fails_before_qa_and_writes_diagnostic(
     assert "QA was not run" in revision
 
 
+def test_full_qa_run_with_zero_evidence_claims_stops_before_synthesis(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        publication_date="2026-01-10",
+                        relevance_rationale="Primary source for supplier expectations.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="high",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(claims=[])
+        if agent_key in {"news", "competitor", "risk", "synthesis", "qa"}:
+            raise AssertionError(f"{agent_key} should not run with zero evidence claims.")
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=_fetcher_with_supplier_content,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert calls == ["intake", "planner", "source_discovery", "evidence_extraction"]
+    assert result.metadata.status == "evidence_needs_review"
+    assert result.evidence_ledger is not None
+    assert result.evidence_ledger.claims == []
+    assert "No valid evidence claims were extracted from approved sources." in (
+        result.evidence_ledger.validation_warnings
+    )
+    assert (run_dir / "evidence_review.md").exists()
+    assert (run_dir / "artifact_review.md").exists()
+    assert not (run_dir / "draft_report.md").exists()
+    assert not (run_dir / "qa_review.json").exists()
+    assert not (run_dir / "report.md").exists()
+    evidence_review = (run_dir / "evidence_review.md").read_text()
+    artifact_review = (run_dir / "artifact_review.md").read_text()
+    assert "No valid evidence claims were extracted from approved sources." in evidence_review
+    assert "Fetched source content exists" in evidence_review
+    assert "evidence extraction prompt/source chunks" in evidence_review
+    assert "- Status: evidence_needs_review" in artifact_review
+    assert "- Evidence claim count: 0" in artifact_review
+
+
 def test_full_qa_run_with_allowed_claim_ids_reaches_qa_normally(
     tmp_path: Path,
 ) -> None:

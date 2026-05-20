@@ -31,6 +31,9 @@ from agentic_research.report_writer import (
 from agentic_research.run_logging import RunLogger
 
 
+EMPTY_EVIDENCE_WARNING = "No valid evidence claims were extracted from approved sources."
+
+
 class ResearchRunResult(BaseModel):
     metadata: RunMetadata
     run_dir: Path
@@ -235,7 +238,13 @@ def write_checkpoint_artifacts(
             evidence_ledger,
             run_logger,
         )
-    write_evidence_review_artifact(run_dir, evidence_ledger, status=status)
+    write_evidence_review_artifact(
+        run_dir,
+        evidence_ledger,
+        status=status,
+        source_content=source_content,
+        source_fetch_log=source_fetch_log,
+    )
     draft_report_path = None
     report_path = None
     if report is not None:
@@ -289,19 +298,85 @@ def has_blocking_evidence_warnings(evidence_ledger: EvidenceLedgerModel) -> bool
     )
 
 
-def evidence_review_markdown(evidence_ledger: EvidenceLedgerModel) -> str:
+def _source_fetch_counts(source_fetch_log: SourceFetchLog | None) -> tuple[int, int, int]:
+    if source_fetch_log is None:
+        return 0, 0, 0
+    fetched = failed = skipped = 0
+    for result in source_fetch_log.results:
+        if result.status == "fetched":
+            fetched += 1
+        elif result.status == "failed":
+            failed += 1
+        elif result.status == "skipped":
+            skipped += 1
+    return fetched, failed, skipped
+
+
+def _evidence_sufficiency_lines(
+    *,
+    evidence_ledger: EvidenceLedgerModel,
+    source_content: list[SourceContent] | None,
+    source_fetch_log: SourceFetchLog | None,
+) -> list[str]:
+    if evidence_ledger.claims:
+        return []
+
+    fetched_count, failed_count, skipped_count = _source_fetch_counts(source_fetch_log)
+    content_count = len(source_content or [])
+    lines = [
+        f"- {EMPTY_EVIDENCE_WARNING}",
+        "- Inspect source_content.json and source_fetch_log.json before rerunning.",
+    ]
+    if content_count > 0:
+        source_word = "source" if content_count == 1 else "sources"
+        lines.append(
+            f"- Fetched source content exists for {content_count} {source_word}; "
+            "check the evidence extraction prompt/source chunks."
+        )
+    else:
+        lines.append(
+            "- No source content was fetched; check source discovery/source ingestion."
+        )
+    if source_fetch_log is not None:
+        lines.append(
+            "- Fetch results: "
+            f"{fetched_count} fetched, {failed_count} failed, {skipped_count} skipped."
+        )
+    return lines
+
+
+def evidence_review_markdown(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    source_content: list[SourceContent] | None = None,
+    source_fetch_log: SourceFetchLog | None = None,
+) -> str:
     blocking_warnings = [
         warning
         for warning in evidence_ledger.validation_warnings
         if is_blocking_evidence_warning(warning)
     ]
     warning_lines = "\n".join(f"- {warning}" for warning in blocking_warnings)
+    sufficiency_lines = _evidence_sufficiency_lines(
+        evidence_ledger=evidence_ledger,
+        source_content=source_content,
+        source_fetch_log=source_fetch_log,
+    )
+    sufficiency_section = ""
+    if sufficiency_lines:
+        sufficiency_section = (
+            "\n\n## Evidence Sufficiency\n"
+            + "\n".join(sufficiency_lines)
+            + "\n"
+        )
     return (
         "# Evidence Review Required\n\n"
-        "Synthesis and QA were not run because evidence validation produced "
-        "blocking warnings.\n\n"
+        "Synthesis and QA were skipped because evidence validation produced "
+        "blocking warnings. Synthesis and QA were not run, and no final report "
+        "was written.\n\n"
         "## Blocking Warnings\n"
         f"{warning_lines or '- None'}\n"
+        f"{sufficiency_section}"
     )
 
 
@@ -310,6 +385,8 @@ def write_evidence_review_artifact(
     evidence_ledger: EvidenceLedgerModel | None,
     *,
     status: str,
+    source_content: list[SourceContent] | None = None,
+    source_fetch_log: SourceFetchLog | None = None,
 ) -> None:
     if (
         status != "evidence_needs_review"
@@ -318,7 +395,11 @@ def write_evidence_review_artifact(
     ):
         return
     (run_dir / "evidence_review.md").write_text(
-        evidence_review_markdown(evidence_ledger),
+        evidence_review_markdown(
+            evidence_ledger,
+            source_content=source_content,
+            source_fetch_log=source_fetch_log,
+        ),
         encoding="utf-8",
     )
 
