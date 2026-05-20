@@ -146,10 +146,11 @@ class SourceFetchResult(StrictModel):
     status: SourceFetchStatus
     content_type: str | None = None
     title: str | None = None
-    text: str | None = None
     excerpt: str | None = None
-    chunks: list[SourceChunk] = Field(default_factory=list)
     error: str | None = None
+    text_char_count: int = 0
+    chunk_count: int = 0
+    fetched_url: str | None = None
 
 
 class SourceFetchLog(StrictModel):

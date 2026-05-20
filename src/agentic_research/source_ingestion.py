@@ -179,6 +179,7 @@ def _content_and_result(
     response: SourceHttpResponse,
 ) -> tuple[SourceContent | None, SourceFetchResult]:
     content_type = _content_type(response.headers)
+    fetched_url = response.url if response.url != source.url else None
     if content_type in _PDF_CONTENT_TYPES or _is_pdf_url(response.url):
         return None, SourceFetchResult(
             source_id=source.id,
@@ -186,6 +187,7 @@ def _content_and_result(
             status="skipped",
             content_type=content_type or "application/pdf",
             error="PDF ingestion is not implemented.",
+            fetched_url=fetched_url,
         )
     if response.status_code >= 400:
         return None, SourceFetchResult(
@@ -194,6 +196,7 @@ def _content_and_result(
             status="failed",
             content_type=content_type,
             error=f"HTTP {response.status_code}",
+            fetched_url=fetched_url,
         )
 
     if content_type is None or any(marker == content_type for marker in _HTML_CONTENT_MARKERS):
@@ -208,6 +211,7 @@ def _content_and_result(
             status="skipped",
             content_type=content_type,
             error=f"Unsupported content type: {content_type}",
+            fetched_url=fetched_url,
         )
 
     if not text:
@@ -218,10 +222,12 @@ def _content_and_result(
             content_type=content_type,
             title=title,
             error="No readable text extracted.",
+            fetched_url=fetched_url,
         )
 
     chunks = _chunk_text(source_id=source.id, url=source.url, text=text)
     excerpt = _excerpt(text)
+    log_excerpt = _excerpt(text, max_chars=240)
     content = SourceContent(
         source_id=source.id,
         url=source.url,
@@ -237,9 +243,10 @@ def _content_and_result(
         status="fetched",
         content_type=content_type,
         title=content.title,
-        text=text,
-        excerpt=excerpt,
-        chunks=chunks,
+        excerpt=log_excerpt,
+        text_char_count=len(text),
+        chunk_count=len(chunks),
+        fetched_url=fetched_url,
     )
 
 

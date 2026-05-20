@@ -77,10 +77,47 @@ def test_ingest_source_content_fetches_included_html_and_removes_page_noise() ->
     assert contents[0].source_id == "src_included"
     assert contents[0].title == "Supplier standards"
     assert "Costco requires suppliers to meet delivery windows." in contents[0].text
+    assert contents[0].excerpt is not None
+    assert "Costco requires suppliers to meet delivery windows." in contents[0].excerpt
     assert "Navigation link" not in contents[0].text
     assert "Footer links" not in contents[0].text
     assert contents[0].chunks
+    assert contents[0].chunks[0].text
     assert log.results[0].status == "fetched"
+    assert log.results[0].text_char_count == len(contents[0].text)
+    assert log.results[0].chunk_count == len(contents[0].chunks)
+
+
+def test_source_fetch_log_does_not_duplicate_full_text_or_chunks() -> None:
+    body = "".join(f"<p>Paragraph {index} has useful supplier detail.</p>" for index in range(80))
+
+    def fake_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
+        return SourceHttpResponse(
+            url="https://example.com/redirected",
+            status_code=200,
+            headers={"content-type": "text/html"},
+            text=f"<html><head><title>Supplier standards</title></head><body>{body}</body></html>",
+        )
+
+    contents, log = ingest_source_content(_source_map(), fetcher=fake_fetcher)
+
+    content_payload = contents[0].model_dump()
+    log_payload = log.model_dump()
+    log_result = log_payload["results"][0]
+    assert "text" in content_payload
+    assert "excerpt" in content_payload
+    assert "chunks" in content_payload
+    assert content_payload["text"] == contents[0].text
+    assert content_payload["excerpt"] == contents[0].excerpt
+    assert content_payload["chunks"] == [
+        chunk.model_dump() for chunk in contents[0].chunks
+    ]
+    assert "text" not in log_result
+    assert "chunks" not in log_result
+    assert log_result["text_char_count"] == len(contents[0].text)
+    assert log_result["chunk_count"] == len(contents[0].chunks)
+    assert len(log_result["excerpt"]) <= 240
+    assert log_result["fetched_url"] == "https://example.com/redirected"
 
 
 def test_ingest_source_content_logs_failed_fetch_without_raising() -> None:
@@ -94,6 +131,11 @@ def test_ingest_source_content_logs_failed_fetch_without_raising() -> None:
     assert log.results[0].status == "failed"
     assert log.results[0].error is not None
     assert "request timed out" in log.results[0].error
+    assert log.results[0].text_char_count == 0
+    assert log.results[0].chunk_count == 0
+    log_payload = log.model_dump()
+    assert "text" not in log_payload["results"][0]
+    assert "chunks" not in log_payload["results"][0]
 
 
 def test_ingest_source_content_skips_pdf_without_crashing() -> None:
@@ -113,3 +155,8 @@ def test_ingest_source_content_skips_pdf_without_crashing() -> None:
     assert contents == []
     assert log.results[0].status == "skipped"
     assert log.results[0].error == "PDF ingestion is not implemented."
+    assert log.results[0].text_char_count == 0
+    assert log.results[0].chunk_count == 0
+    log_payload = log.model_dump()
+    assert "text" not in log_payload["results"][0]
+    assert "chunks" not in log_payload["results"][0]
