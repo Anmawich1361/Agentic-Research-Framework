@@ -74,6 +74,8 @@ _LIKELY_CLAIM_ID_RE = re.compile(
 )
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _SOURCE_ID_REFERENCE_RE = re.compile(r"\b(src_[A-Za-z0-9_-]+)\b")
+_LIKELY_SOURCE_ID_RE = re.compile(r"^(?:src_[A-Za-z0-9_-]+|s\d+)$")
+_LIKELY_SOURCE_ID_TOKEN_RE = re.compile(r"\b(?:src_[A-Za-z0-9_-]+|s\d+)\b")
 _BROAD_UNSUPPORTED_MARKERS = (
     "advantage",
     "best positioned",
@@ -254,7 +256,48 @@ def missing_report_sections(
     ]
 
 
-def markdown_claim_references(markdown: str, known_claim_ids: set[str]) -> set[str]:
+def _known_id_references(line: str, known_ids: set[str]) -> set[str]:
+    return {
+        known_id
+        for known_id in known_ids
+        if re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(known_id)}(?![A-Za-z0-9_-])",
+            line,
+        )
+    }
+
+
+def markdown_source_references(
+    markdown: str,
+    known_source_ids: set[str] | None = None,
+) -> set[str]:
+    references = set(_SOURCE_ID_REFERENCE_RE.findall(markdown))
+    known_source_ids = known_source_ids or set()
+    current_section: str | None = None
+    for line in markdown.splitlines():
+        current_section = _current_section(line, current_section)
+        if current_section != "source appendix":
+            continue
+        references.update(_LIKELY_SOURCE_ID_TOKEN_RE.findall(line))
+        references.update(_known_id_references(line, known_source_ids))
+        references.update(
+            reference
+            for reference in _BRACKET_REFERENCE_RE.findall(line)
+            if reference in known_source_ids or _LIKELY_SOURCE_ID_RE.match(reference)
+        )
+    return references
+
+
+def markdown_claim_references(
+    markdown: str,
+    known_claim_ids: set[str],
+    *,
+    known_source_ids: set[str] | None = None,
+) -> set[str]:
+    source_references = markdown_source_references(
+        markdown,
+        known_source_ids=known_source_ids,
+    )
     references = set(_BRACKET_REFERENCE_RE.findall(markdown))
     for footer_match in _CLAIM_IDS_FOOTER_RE.findall(markdown):
         references.update(
@@ -264,12 +307,9 @@ def markdown_claim_references(markdown: str, known_claim_ids: set[str]) -> set[s
     return {
         reference
         for reference in references
-        if reference in known_claim_ids or _LIKELY_CLAIM_ID_RE.match(reference)
+        if reference in known_claim_ids
+        or (_LIKELY_CLAIM_ID_RE.match(reference) and reference not in source_references)
     }
-
-
-def markdown_source_references(markdown: str) -> set[str]:
-    return set(_SOURCE_ID_REFERENCE_RE.findall(markdown))
 
 
 def validate_report_traceability(
@@ -279,7 +319,12 @@ def validate_report_traceability(
     source_map: SourceMap,
 ) -> None:
     allowed_claim_ids = {claim.id for claim in evidence_ledger.claims}
-    markdown_claim_ids = markdown_claim_references(report.markdown, allowed_claim_ids)
+    allowed_source_ids = {source.id for source in source_map.sources}
+    markdown_claim_ids = markdown_claim_references(
+        report.markdown,
+        allowed_claim_ids,
+        known_source_ids=allowed_source_ids,
+    )
     report.claim_ids = sorted(set(report.claim_ids).union(markdown_claim_ids))
     unknown_claim_ids = sorted(
         claim_id for claim_id in report.claim_ids if claim_id not in allowed_claim_ids
@@ -292,9 +337,8 @@ def validate_report_traceability(
             )
         )
 
-    allowed_source_ids = {source.id for source in source_map.sources}
     report_source_ids = set(report.source_ids).union(
-        markdown_source_references(report.markdown)
+        markdown_source_references(report.markdown, known_source_ids=allowed_source_ids)
     )
     unknown_source_ids = sorted(
         source_id for source_id in report_source_ids if source_id not in allowed_source_ids
