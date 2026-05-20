@@ -1,8 +1,11 @@
 VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
+VENV_PYTEST := $(VENV)/bin/pytest
+VENV_RUFF := $(VENV)/bin/ruff
+VENV_MYPY := $(VENV)/bin/mypy
 ARF := $(VENV)/bin/arf
 
-.PHONY: setup reset-env doctor check smoke-mock smoke-live-checkpoint eval install test lint typecheck mock-run clean ensure-venv
+.PHONY: setup reset-env doctor check smoke-mock smoke-live-checkpoint eval install test pytest-smoke lint typecheck mock-run clean ensure-venv
 
 setup:
 	@if [ ! -x "$(VENV_PYTHON)" ]; then \
@@ -29,13 +32,16 @@ ensure-venv:
 	)
 
 test: ensure-venv
-	$(VENV_PYTHON) -m pytest
+	PYTHONPATH=$(CURDIR) $(VENV_PYTEST)
+
+pytest-smoke: ensure-venv
+	$(VENV_PYTEST) --version
 
 lint: ensure-venv
-	$(VENV_PYTHON) -m ruff check .
+	$(VENV_RUFF) check .
 
 typecheck: ensure-venv
-	$(VENV_PYTHON) -m mypy src
+	$(VENV_MYPY) src
 
 check: test lint typecheck
 
