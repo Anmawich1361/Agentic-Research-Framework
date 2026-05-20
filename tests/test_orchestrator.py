@@ -13,6 +13,8 @@ from agentic_research.models import (
     SourceChunk,
     SourceCandidate,
     SourceContent,
+    SourceFetchLog,
+    SourceFetchResult,
     SourceDiscoveryResult,
     SourceMap,
     SourceScore,
@@ -22,6 +24,7 @@ from agentic_research.models import (
 from agentic_research.orchestrator import (
     _deduplicate_claims,
     _source_content_payload,
+    _synthesis_source_evidence_context,
     _validate_evidence,
     continue_research,
     run_research,
@@ -131,6 +134,133 @@ def test_source_content_payload_bounds_chunks_for_agent_context() -> None:
     assert "text" not in payload[0]
     assert len(payload[0]["chunks"]) == 3
     assert sum(len(chunk["text"]) for chunk in payload[0]["chunks"]) == 2500
+
+
+def test_source_content_payload_skips_low_information_filing_preamble() -> None:
+    content = SourceContent(
+        source_id="src_filing",
+        url="https://example.com/filing",
+        content_type="text/html",
+        title="SEC filing",
+        text="",
+        chunks=[
+            SourceChunk(
+                source_id="src_filing",
+                url="https://example.com/filing",
+                chunk_id="src_filing_chunk_1",
+                index=0,
+                text=(
+                    "0000909832\nus-gaap:CommonStockMember\n"
+                    "http://fasb.org/us-gaap/2024#Assets\n0000909832\n"
+                )
+                * 12,
+            ),
+            SourceChunk(
+                source_id="src_filing",
+                url="https://example.com/filing",
+                chunk_id="src_filing_chunk_2",
+                index=1,
+                text=(
+                    "Costco operates membership warehouses and sells merchandise "
+                    "across food, non-food, and services categories. The business "
+                    "section discusses warehouses, membership renewal, and net sales."
+                ),
+            ),
+        ],
+    )
+
+    payload = _source_content_payload([content], max_chunks_per_source=1)
+
+    assert payload[0]["chunks"][0]["chunk_id"] == "src_filing_chunk_2"
+
+
+def test_synthesis_source_evidence_context_warns_when_direct_sources_do_not_fetch() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="s_primary",
+                title="Costco investor relations",
+                publisher="Costco",
+                url="https://investor.costco.com",
+                source_type="investor_material",
+                bias_risk="low",
+                relevance_rationale="Direct company source.",
+                recommended_uses=["primary current support"],
+            ),
+            SourceCandidate(
+                id="s_secondary",
+                title="Costco transcript index",
+                publisher="Transcript Site",
+                url="https://example.com/transcripts",
+                source_type="earnings_transcript",
+                bias_risk="medium",
+                relevance_rationale="Secondary transcript index.",
+                recommended_uses=["recent commentary"],
+            ),
+        ],
+        scores=[
+            SourceScore(
+                source_id="s_primary",
+                authority_score=5,
+                relevance_score=5,
+                recency_score=4,
+                coverage_score=4,
+                bias_risk="low",
+                final_score=4.6,
+                include=True,
+            ),
+            SourceScore(
+                source_id="s_secondary",
+                authority_score=3,
+                relevance_score=4,
+                recency_score=4,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=3.5,
+                include=True,
+            ),
+        ],
+        gaps=[],
+    )
+    source_content = [
+        SourceContent(
+            source_id="s_secondary",
+            url="https://example.com/transcripts",
+            content_type="text/html",
+            title="Costco transcript index",
+            text="Secondary transcript page.",
+            excerpt="Secondary transcript page.",
+        )
+    ]
+    fetch_log = SourceFetchLog(
+        results=[
+            SourceFetchResult(
+                source_id="s_primary",
+                url="https://investor.costco.com",
+                status="failed",
+                error="No readable text extracted.",
+            ),
+            SourceFetchResult(
+                source_id="s_secondary",
+                url="https://example.com/transcripts",
+                status="fetched",
+                content_type="text/html",
+            ),
+        ]
+    )
+
+    context = _synthesis_source_evidence_context(
+        source_map=source_map,
+        source_content=source_content,
+        source_fetch_log=fetch_log,
+    )
+
+    assert context["fetched_source_ids"] == ["s_secondary"]
+    assert context["fetched_direct_source_ids"] == []
+    assert context["candidate_direct_source_ids"] == ["s_primary"]
+    assert context["failed_or_skipped_source_ids"] == ["s_primary"]
+    assert context["secondary_or_indirect_only"] is True
+    assert any("direct source content" in warning for warning in context["warnings"])
 
 
 def test_validate_evidence_drops_claims_without_usable_source_before_synthesis() -> None:
@@ -1295,8 +1425,14 @@ def test_synthesis_payload_uses_final_allowed_claim_ids_after_specialist_dedup(
         for warning in result.evidence_ledger.validation_warnings
     )
     assert "specialist_analyses" in synthesis_payload
-    assert "r1" in json.dumps(synthesis_payload["specialist_analyses"])
+    assert "r1" not in json.dumps(synthesis_payload["specialist_analyses"])
     assert "Do not cite claim IDs from specialist_analyses" in json.dumps(
+        synthesis_payload["claim_reference_rules"]
+    )
+    assert "final evidence_ledger and allowed_claim_ids are authoritative" in json.dumps(
+        synthesis_payload["claim_reference_rules"]
+    )
+    assert "skipped ID is not allowed" in json.dumps(
         synthesis_payload["claim_reference_rules"]
     )
 

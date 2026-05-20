@@ -38,6 +38,7 @@ from agentic_research.models import (
     RunMetadata,
     RunType,
     SourceCandidate,
+    SourceChunk,
     SourceContent,
     SourceDiscoveryResult,
     SourceFetchLog,
@@ -934,6 +935,28 @@ def _allowed_claim_ids(evidence_ledger: EvidenceLedgerModel) -> list[str]:
     return [claim.id for claim in evidence_ledger.claims]
 
 
+def _specialist_analyses_payload_for_synthesis(
+    specialist_analyses: list[SpecialistAnalysis],
+    *,
+    evidence_ledger: EvidenceLedgerModel,
+) -> list[dict[str, Any]]:
+    allowed_claim_ids = set(_allowed_claim_ids(evidence_ledger))
+    payload: list[dict[str, Any]] = []
+    for analysis in specialist_analyses:
+        payload.append(
+            analysis.model_copy(
+                update={
+                    "evidence_claims": [
+                        claim
+                        for claim in analysis.evidence_claims
+                        if claim.id in allowed_claim_ids
+                    ]
+                }
+            ).model_dump(mode="json")
+        )
+    return payload
+
+
 def _claim_reference_rules(evidence_ledger: EvidenceLedgerModel) -> list[str]:
     allowed_count = len(evidence_ledger.claims)
     return [
@@ -941,13 +964,93 @@ def _claim_reference_rules(evidence_ledger: EvidenceLedgerModel) -> list[str]:
         "allowed_claim_ids in [claim_id] form.",
         "Use only allowed_claim_ids; do not invent, reuse, or restore dropped "
         "claim IDs.",
+        "allowed_claim_ids are exact, case-sensitive strings. If a numeric "
+        "sequence skips an ID, the skipped ID is not allowed.",
         "Do not cite claim IDs from specialist_analyses unless that exact ID "
         "is present in allowed_claim_ids.",
+        "specialist_analyses in this payload are filtered for synthesis; the "
+        "final evidence_ledger and allowed_claim_ids are authoritative.",
         "If a point would require a missing claim ID, omit it or rephrase it "
         "as an open question or evidence gap.",
         "Populate claim_ids with every allowed claim ID cited in markdown.",
+        "Before returning, compare every bracketed claim ID in markdown and "
+        "every item in claim_ids against allowed_claim_ids; remove or rewrite "
+        "anything that does not match exactly.",
         f"The final evidence ledger currently contains {allowed_count} allowed claim IDs.",
     ]
+
+
+def _synthesis_quality_rules() -> list[str]:
+    return [
+        "Use source_content-derived evidence claims as the basis for report claims.",
+        "Do not promote CNBC/news summaries, transcript summaries, or source-finding "
+        "aids into Costco-specific strategy unless a concrete evidence claim directly "
+        "supports the strategy statement.",
+        "Recent developments must cite direct evidence claims from fetched source "
+        "content. If latest earnings release or transcript support is missing, say "
+        "that it was not verified from available sources.",
+        "Supplier-meeting recommendations require direct claim IDs or an explicit "
+        "caveat that the point is a hypothesis or question to confirm with Costco.",
+        "Separate directly supported facts, cautious inferences, and unknowns/open "
+        "questions in the draft.",
+        "Quartr pages, source-finding aids, search-result pages, and source-map "
+        "rationales are not strategic evidence.",
+    ]
+
+
+def _synthesis_source_evidence_context(
+    *,
+    source_map: SourceMap,
+    source_content: list[SourceContent],
+    source_fetch_log: SourceFetchLog | None,
+) -> dict[str, Any]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    fetched_source_ids = [content.source_id for content in source_content]
+    fetched_source_id_set = set(fetched_source_ids)
+    direct_source_types = {"corporate_filing", "investor_material", "primary_company"}
+    fetched_direct_source_ids = [
+        source_id
+        for source_id in fetched_source_ids
+        if source_lookup.get(source_id) is not None
+        and source_lookup[source_id].source_type in direct_source_types
+    ]
+    candidate_direct_source_ids = [
+        source.id for source in source_map.sources if source.source_type in direct_source_types
+    ]
+    failed_or_skipped_source_ids: list[str] = []
+    if source_fetch_log is not None:
+        failed_or_skipped_source_ids = [
+            result.source_id
+            for result in source_fetch_log.results
+            if result.status in {"failed", "skipped"}
+        ]
+
+    warnings: list[str] = []
+    if candidate_direct_source_ids and not fetched_direct_source_ids:
+        warnings.append(
+            "Primary/company/investor source candidates were discovered but no readable "
+            "direct source content was fetched. Treat Costco recent developments and "
+            "strategy as unverified unless directly supported by fetched evidence."
+        )
+    if fetched_source_ids and not fetched_direct_source_ids:
+        warnings.append(
+            "Fetched source content is secondary or indirect only. State this source "
+            "gap and avoid presenting Costco current strategy as verified."
+        )
+    if not fetched_source_ids:
+        warnings.append(
+            "No fetched source content is available. Use only evidence gaps and open "
+            "questions for current or recent-development points."
+        )
+
+    return {
+        "fetched_source_ids": fetched_source_ids,
+        "fetched_direct_source_ids": fetched_direct_source_ids,
+        "candidate_direct_source_ids": candidate_direct_source_ids,
+        "failed_or_skipped_source_ids": failed_or_skipped_source_ids,
+        "secondary_or_indirect_only": bool(fetched_source_id_set and not fetched_direct_source_ids),
+        "warnings": warnings,
+    }
 
 
 def _report_revision_markdown(
@@ -1067,7 +1170,10 @@ def _source_content_payload(
         if remaining_chars <= 0:
             break
         chunks: list[dict[str, Any]] = []
-        for chunk in content.chunks[:max_chunks_per_source]:
+        for chunk in _select_source_chunks(
+            content.chunks,
+            max_chunks=max_chunks_per_source,
+        ):
             if remaining_chars <= 0:
                 break
             text = chunk.text[: min(max_chunk_chars, remaining_chars)]
@@ -1092,6 +1198,52 @@ def _source_content_payload(
             }
         )
     return payload
+
+
+def _select_source_chunks(
+    chunks: list[SourceChunk],
+    *,
+    max_chunks: int,
+) -> list[SourceChunk]:
+    if len(chunks) <= max_chunks:
+        return list(chunks)
+    ranked = sorted(
+        enumerate(chunks),
+        key=lambda item: (_source_chunk_signal_score(item[1].text), -item[0]),
+        reverse=True,
+    )
+    selected_indexes = sorted(index for index, _chunk in ranked[:max_chunks])
+    return [chunks[index] for index in selected_indexes]
+
+
+def _source_chunk_signal_score(text: str) -> float:
+    lowered = text.lower()
+    alpha_count = sum(character.isalpha() for character in text)
+    digit_count = sum(character.isdigit() for character in text)
+    char_count = max(len(text), 1)
+    word_count = len(re.findall(r"[a-zA-Z]{4,}", text))
+    score = word_count * (alpha_count / char_count)
+
+    for marker in (
+        "business",
+        "earnings",
+        "member",
+        "membership",
+        "merchandise",
+        "net sales",
+        "risk",
+        "sales",
+        "supplier",
+        "warehouse",
+    ):
+        if marker in lowered:
+            score += 25
+
+    score -= 40 * lowered.count("us-gaap")
+    score -= 40 * lowered.count("fasb.org")
+    score -= 10 * lowered.count("0000909832")
+    score -= 20 * (digit_count / char_count)
+    return score
 
 
 def _source_fetch_log_payload(source_fetch_log: SourceFetchLog | None) -> dict[str, Any] | None:
@@ -1227,6 +1379,11 @@ def _run_qa_review(
             "Review the draft report for reliability, source quality, and usefulness.",
             "Do not rewrite the report.",
             "High-severity issues should block final publication.",
+            "Do not treat Quartr pages, source-finding aids, or source-map rationales "
+            "as strategic evidence.",
+            "Block recent-development claims that lack concrete source-content support.",
+            "Flag supplier-meeting recommendations that lack direct claim IDs or "
+            "explicit caveats.",
         ],
         "output_schema": "QAReview",
     }
@@ -1450,9 +1607,10 @@ def _continue_research_impl(
             "source_map": source_map.model_dump(mode="json"),
             "evidence_ledger": evidence_ledger.model_dump(mode="json"),
             "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
-            "specialist_analyses": [
-                analysis.model_dump(mode="json") for analysis in specialist_analyses
-            ],
+            "specialist_analyses": _specialist_analyses_payload_for_synthesis(
+                specialist_analyses,
+                evidence_ledger=evidence_ledger,
+            ),
             "user_feedback": feedback_payload,
             "selected_report_template": {
                 "name": template_name,
@@ -1481,6 +1639,12 @@ def _continue_research_impl(
                 "statement must cite an allowed evidence ledger claim ID in "
                 "[claim_id] form. Populate claim_ids with every allowed claim ID "
                 "cited in markdown."
+            ),
+            "quality_rules": _synthesis_quality_rules(),
+            "source_evidence_context": _synthesis_source_evidence_context(
+                source_map=source_map,
+                source_content=source_content,
+                source_fetch_log=source_fetch_log,
             ),
             "output_schema": "Report",
         }
@@ -1941,9 +2105,10 @@ def _run_research_impl(
                 "source_map": source_map.model_dump(mode="json"),
                 "evidence_ledger": evidence_ledger.model_dump(mode="json"),
                 "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
-                "specialist_analyses": [
-                    analysis.model_dump(mode="json") for analysis in specialist_analyses
-                ],
+                "specialist_analyses": _specialist_analyses_payload_for_synthesis(
+                    specialist_analyses,
+                    evidence_ledger=evidence_ledger,
+                ),
                 "selected_report_template": {
                     "name": template_name,
                     "markdown": load_template(template_name),
@@ -1969,6 +2134,12 @@ def _run_research_impl(
                     "statement must cite an allowed evidence ledger claim ID in "
                     "[claim_id] form. Populate claim_ids with every allowed claim ID "
                     "cited in markdown."
+                ),
+                "quality_rules": _synthesis_quality_rules(),
+                "source_evidence_context": _synthesis_source_evidence_context(
+                    source_map=source_map,
+                    source_content=source_content,
+                    source_fetch_log=source_fetch_log,
                 ),
                 "output_schema": "Report",
             }

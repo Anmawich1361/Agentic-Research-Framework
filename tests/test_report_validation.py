@@ -47,6 +47,76 @@ def _source_map() -> SourceMap:
     )
 
 
+def _quality_source_map() -> SourceMap:
+    return SourceMap(
+        sources=[
+            SourceCandidate(
+                id="src_primary",
+                title="Costco primary source",
+                publisher="Costco",
+                url="https://example.com/primary",
+                source_type="primary_company",
+                bias_risk="medium",
+                relevance_rationale="Primary company evidence.",
+                recommended_uses=["stable facts"],
+            ),
+            SourceCandidate(
+                id="src_news",
+                title="Costco recent coverage",
+                publisher="Example News",
+                url="https://example.com/news",
+                source_type="news",
+                bias_risk="medium",
+                relevance_rationale="Recent reporting.",
+                recommended_uses=["recent developments"],
+            ),
+            SourceCandidate(
+                id="src_quartr",
+                title="Quartr Costco earnings call finder",
+                publisher="Quartr",
+                url="https://example.com/quartr/costco",
+                source_type="source_finding_aid",
+                bias_risk="medium",
+                relevance_rationale="Useful for finding earnings-call materials.",
+                recommended_uses=["find transcript"],
+            ),
+        ],
+        scores=[
+            SourceScore(
+                source_id="src_primary",
+                authority_score=4,
+                relevance_score=5,
+                recency_score=4,
+                coverage_score=4,
+                bias_risk="medium",
+                final_score=4.2,
+                include=True,
+            ),
+            SourceScore(
+                source_id="src_news",
+                authority_score=3,
+                relevance_score=4,
+                recency_score=5,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=3.5,
+                include=True,
+            ),
+            SourceScore(
+                source_id="src_quartr",
+                authority_score=2,
+                relevance_score=3,
+                recency_score=3,
+                coverage_score=2,
+                bias_risk="medium",
+                final_score=2.5,
+                include=True,
+            ),
+        ],
+        gaps=[],
+    )
+
+
 def _ledger(claims: list[EvidenceClaim] | None = None) -> EvidenceLedger:
     return EvidenceLedger(
         claims=claims
@@ -63,6 +133,67 @@ def _ledger(claims: list[EvidenceClaim] | None = None) -> EvidenceLedger:
                 quote_or_excerpt="Vendor Inquiries",
             )
         ]
+    )
+
+
+def _quality_ledger() -> EvidenceLedger:
+    return EvidenceLedger(
+        claims=[
+            EvidenceClaim(
+                id="c_primary",
+                claim="Costco operates membership warehouse clubs.",
+                claim_type="fact",
+                source_id="src_primary",
+                source_url="https://example.com/primary",
+                confidence="medium",
+                report_section="what_we_know",
+                quote_or_excerpt="membership warehouse clubs",
+            ),
+            EvidenceClaim(
+                id="c_news",
+                claim="Recent reporting said Costco discussed e-commerce growth.",
+                claim_type="fact",
+                source_id="src_news",
+                source_url="https://example.com/news",
+                confidence="medium",
+                report_section="recent_developments",
+                quote_or_excerpt="e-commerce growth",
+            ),
+            EvidenceClaim(
+                id="c_primary_two",
+                claim="Costco files annual reports with business information.",
+                claim_type="fact",
+                source_id="src_primary",
+                source_url="https://example.com/primary",
+                confidence="medium",
+                report_section="what_we_know",
+                quote_or_excerpt="annual reports",
+            ),
+        ]
+    )
+
+
+def _complete_meeting_report(body: str) -> Report:
+    return _report(
+        "# Costco Meeting Prep\n\n"
+        "## Executive Summary\n"
+        "Costco operates membership warehouse clubs. [c_primary]\n\n"
+        "## Context for Meeting\n"
+        "This brief supports a supplier meeting; category and team are unknown.\n\n"
+        "## What We Know\n"
+        "- Costco operates membership warehouse clubs. [c_primary]\n"
+        "- Costco files annual reports with business information. [c_primary_two]\n\n"
+        "## What We Do Not Know\n"
+        "- Recent earnings/transcript support was not verified from available sources.\n\n"
+        f"{body}\n\n"
+        "## Questions to Ask\n"
+        "- Which buying team owns this category?\n\n"
+        "## Risks and Watchouts\n"
+        "- Category-specific requirements are not verified from available sources.\n\n"
+        "## Source Appendix\n"
+        "- src_primary — Costco primary source — https://example.com/primary\n"
+        "- src_news — Costco recent coverage — https://example.com/news\n",
+        source_ids=["src_primary", "src_news"],
     )
 
 
@@ -210,3 +341,99 @@ def test_traceability_rejects_stale_short_markdown_claim_ids() -> None:
             evidence_ledger=_ledger_with_claim_ids(["c1", "c2"]),
             source_map=_source_map(),
         )
+
+
+def test_unsupported_recent_development_claim_is_flagged() -> None:
+    report = _complete_meeting_report(
+        "## Supplier/Buyer Angle\n"
+        "Recent developments show Costco is shifting supplier strategy toward digital fulfillment."
+    )
+
+    issues = validate_report(
+        report,
+        evidence_ledger=_quality_ledger(),
+        source_map=_quality_source_map(),
+        template_name="meeting_prep.md",
+    ).issues
+
+    assert any(
+        issue.severity == "high"
+        and issue.category == "missing_recent_signal"
+        and "Recent developments" in issue.problem
+        for issue in issues
+    )
+
+
+def test_recent_evidence_gap_caveat_is_allowed_to_proceed_to_qa() -> None:
+    report = _complete_meeting_report(
+        "## Supplier/Buyer Angle\n"
+        "Caveat: category-specific supplier criteria and recent earnings/transcript "
+        "support were not verified from available sources, so treat supplier "
+        "talking points as questions to confirm."
+    )
+
+    issues = validate_report(
+        report,
+        evidence_ledger=_quality_ledger(),
+        source_map=_quality_source_map(),
+        template_name="meeting_prep.md",
+    ).issues
+
+    assert issues == []
+
+
+def test_source_finding_aid_claims_are_not_promoted_to_strategy() -> None:
+    ledger = _quality_ledger().model_copy(
+        update={
+            "claims": [
+                *_quality_ledger().claims,
+                EvidenceClaim(
+                    id="c_aid",
+                    claim="The Quartr page is useful for finding Costco earnings calls.",
+                    claim_type="fact",
+                    source_id="src_quartr",
+                    source_url="https://example.com/quartr/costco",
+                    confidence="medium",
+                    report_section="recent_developments",
+                    quote_or_excerpt="earnings calls",
+                ),
+            ]
+        }
+    )
+    report = _complete_meeting_report(
+        "## Supplier/Buyer Angle\n"
+        "Costco's current strategy centers on digital fulfillment and supplier readiness. [c_aid]"
+    )
+
+    issues = validate_report(
+        report,
+        evidence_ledger=ledger,
+        source_map=_quality_source_map(),
+        template_name="meeting_prep.md",
+    ).issues
+
+    assert any(
+        issue.category == "weak_source"
+        and "source-finding aid" in issue.problem
+        for issue in issues
+    )
+
+
+def test_meeting_prep_recommendations_require_citation_or_caveat() -> None:
+    report = _complete_meeting_report(
+        "## Supplier/Buyer Angle\n"
+        "Suppliers should emphasize pack architecture and landed-cost discipline."
+    )
+
+    issues = validate_report(
+        report,
+        evidence_ledger=_quality_ledger(),
+        source_map=_quality_source_map(),
+        template_name="meeting_prep.md",
+    ).issues
+
+    assert any(
+        issue.category == "overconfident_inference"
+        and "supplier-meeting recommendation" in issue.problem
+        for issue in issues
+    )

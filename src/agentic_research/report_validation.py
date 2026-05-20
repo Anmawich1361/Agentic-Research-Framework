@@ -96,6 +96,59 @@ _BROAD_CLAIM_SKIP_SECTIONS = {
     "source appendix",
     "what we do not know",
 }
+_CAVEAT_MARKERS = (
+    "available sources do not",
+    "caveat",
+    "checked against",
+    "could not verify",
+    "evidence gap",
+    "hypothesis",
+    "limited public evidence",
+    "not found",
+    "not surfaced",
+    "not verified",
+    "open question",
+    "treat",
+    "unknown",
+    "verify",
+)
+_RECENT_CLAIM_MARKERS = (
+    "current",
+    "digital",
+    "earnings",
+    "e-commerce",
+    "latest",
+    "membership",
+    "quarter",
+    "recent",
+    "same-store",
+    "strategic",
+    "strategy",
+    "tariff",
+)
+_RECOMMENDATION_MARKERS = (
+    "emphasize",
+    "must",
+    "need to",
+    "prioritize",
+    "recommend",
+    "should",
+    "stronger pitch",
+)
+_SOURCE_FINDING_AID_MARKERS = (
+    "finder",
+    "finding aid",
+    "find transcript",
+    "quartr",
+    "source_finding_aid",
+    "useful for finding",
+)
+_QUALITY_SKIP_SECTIONS = {
+    "evidence limitations",
+    "questions to ask",
+    "source appendix",
+    "what we do not know",
+}
 
 
 class ReportSectionValidationError(ValueError):
@@ -294,6 +347,139 @@ def _contains_broad_marker(text: str) -> bool:
     return False
 
 
+def _contains_any_marker(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def _has_caveat(text: str) -> bool:
+    return _contains_any_marker(text, _CAVEAT_MARKERS)
+
+
+def _line_claim_ids(line: str, known_claim_ids: set[str]) -> set[str]:
+    return markdown_claim_references(line, known_claim_ids)
+
+
+def _source_by_id(source_map: SourceMap) -> dict[str, object]:
+    return {source.id: source for source in source_map.sources}
+
+
+def _is_source_finding_aid(source: object | None) -> bool:
+    if source is None:
+        return False
+    values = [
+        getattr(source, "source_type", ""),
+        getattr(source, "title", ""),
+        getattr(source, "publisher", ""),
+        getattr(source, "url", ""),
+        getattr(source, "relevance_rationale", ""),
+        " ".join(getattr(source, "recommended_uses", []) or []),
+    ]
+    return _contains_any_marker(" ".join(values), _SOURCE_FINDING_AID_MARKERS)
+
+
+def _claim_is_direct_evidence(claim: object | None, source: object | None) -> bool:
+    if claim is None or _is_source_finding_aid(source):
+        return False
+    claim_type = getattr(claim, "claim_type", None)
+    quote = getattr(claim, "quote_or_excerpt", None)
+    return claim_type == "fact" and bool(quote and quote.strip())
+
+
+def _line_is_report_content(line: str) -> bool:
+    stripped = line.strip().lstrip("-* ").strip()
+    return bool(stripped) and not stripped.startswith("#") and not stripped.endswith("?")
+
+
+def evidence_bound_quality_issues(
+    markdown: str,
+    *,
+    evidence_ledger: EvidenceLedger,
+    source_map: SourceMap,
+) -> list[QAIssue]:
+    known_claim_ids = {claim.id for claim in evidence_ledger.claims}
+    claims_by_id = {claim.id: claim for claim in evidence_ledger.claims}
+    sources_by_id = _source_by_id(source_map)
+    issues: list[QAIssue] = []
+    section: str | None = None
+
+    for line in markdown.splitlines():
+        section = _current_section(line, section)
+        if section in _QUALITY_SKIP_SECTIONS or not _line_is_report_content(line):
+            continue
+        claim_ids = _line_claim_ids(line, known_claim_ids)
+        claims = [claims_by_id[claim_id] for claim_id in claim_ids if claim_id in claims_by_id]
+        sources = [sources_by_id.get(claim.source_id or "") for claim in claims]
+        line_text = line.strip().lstrip("-* ").strip()
+        has_caveat = _has_caveat(line_text)
+
+        if claim_ids and any(_is_source_finding_aid(source) for source in sources):
+            issues.append(
+                QAIssue(
+                    severity="high",
+                    category="weak_source",
+                    problem=(
+                        "Report promotes a source-finding aid into a strategic "
+                        f"conclusion: {line_text}"
+                    ),
+                    suggested_fix=(
+                        "Use source-finding aids only to locate direct evidence; "
+                        "do not cite them as strategic support."
+                    ),
+                    affected_section=section.title() if section else None,
+                )
+            )
+            continue
+
+        if _contains_any_marker(line_text, _RECENT_CLAIM_MARKERS) and not has_caveat:
+            has_direct_recent_claim = any(
+                _claim_is_direct_evidence(claim, source)
+                for claim, source in zip(claims, sources, strict=False)
+            )
+            if not has_direct_recent_claim:
+                issues.append(
+                    QAIssue(
+                        severity="high",
+                        category="missing_recent_signal",
+                        problem=(
+                            "Recent developments or current strategy are presented "
+                            "without concrete evidence from available source content: "
+                            f"{line_text}"
+                        ),
+                        suggested_fix=(
+                            "Cite a direct evidence claim from fetched source content "
+                            "or state that recent support was not verified."
+                        ),
+                        affected_section=section.title() if section else None,
+                    )
+                )
+                continue
+
+        if (
+            section == "supplier/buyer angle"
+            and _contains_any_marker(line_text, _RECOMMENDATION_MARKERS)
+            and not claim_ids
+            and not has_caveat
+        ):
+            issues.append(
+                QAIssue(
+                    severity="medium",
+                    category="overconfident_inference",
+                    problem=(
+                        "supplier-meeting recommendation lacks direct claim IDs "
+                        f"or an explicit caveat: {line_text}"
+                    ),
+                    suggested_fix=(
+                        "Cite direct evidence for the recommendation or frame it "
+                        "as a hypothesis to confirm in the meeting."
+                    ),
+                    affected_section=section.title(),
+                )
+            )
+
+    return issues
+
+
 def _is_uncited_broad_claim(line: str) -> bool:
     stripped = line.strip().lstrip("-* ").strip()
     if not stripped or stripped.startswith("#") or _line_has_claim_reference(stripped):
@@ -407,6 +593,13 @@ def validate_report(
         issues.append(_traceability_issue(exc))
 
     issues.extend(unsupported_broad_claim_issues(report.markdown))
+    issues.extend(
+        evidence_bound_quality_issues(
+            report.markdown,
+            evidence_ledger=evidence_ledger,
+            source_map=source_map,
+        )
+    )
 
     return QAReview(
         ready_to_publish=not issues,

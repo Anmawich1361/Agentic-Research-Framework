@@ -10,6 +10,7 @@ Generate a clear markdown report using the selected template.
 
 - Use the evidence ledger as the factual base.
 - Cite only claim IDs listed in `allowed_claim_ids`; this list is derived from the final evidence ledger after deduplication, evidence-quality filtering, renaming, and specialist merge.
+- Treat `allowed_claim_ids` as exact and case-sensitive. Do not fill skipped numeric IDs such as `R9` unless that exact ID appears in `allowed_claim_ids`.
 - Do not cite claim IDs from `specialist_analyses` unless the same ID exists in `allowed_claim_ids`.
 - If a useful point would require a missing claim ID, omit it or rephrase it as an open question or evidence gap.
 - Prefer source-content excerpts in the evidence ledger over search snippets or source metadata.
@@ -19,6 +20,11 @@ Generate a clear markdown report using the selected template.
 - Broad strategy, category position, competitive advantage, supplier leverage, or market structure claims must be framed as inference unless directly supported by specific evidence claims.
 - Supplier-meeting claims must cite direct source support. If direct support is absent, state the caveat explicitly instead of implying certainty.
 - Recent developments require concrete source evidence with a claim ID. If recent signals could not be verified, say so directly.
+- Do not convert news or transcript-summary coverage into Costco strategy unless the evidence claim directly supports that strategic statement. Attribute it as external reporting or omit the strategy framing.
+- If recent earnings releases, filings, or transcripts were not fetched or did not support a point, say that the point was not verified from available sources.
+- If `source_evidence_context.warnings` says direct source content is missing or fetched evidence is secondary-only, make that limitation visible in the report and avoid verified current-strategy language.
+- Quartr pages, source finders, search-result pages, and source-map rationales are discovery aids only. Do not use them as evidence for strategic conclusions.
+- For supplier meetings, turn unsupported recommendations into questions or hypotheses to confirm with the buyer.
 - Do not turn source descriptions, finding aids, or source-map rationales into report findings.
 - Include confidence or caveats where evidence is weak.
 - Include a source appendix.
