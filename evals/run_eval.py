@@ -35,6 +35,13 @@ class CheckResult:
     passed: bool
     detail: str
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "detail": self.detail,
+        }
+
 
 @dataclass(frozen=True)
 class FixtureResult:
@@ -44,6 +51,25 @@ class FixtureResult:
     passed: bool
     checks: list[CheckResult]
     qa_review: QAReview
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fixture_id": self.fixture_id,
+            "name": self.name,
+            "score": self.score,
+            "passed": self.passed,
+            "checks": [check.to_dict() for check in self.checks],
+            "qa_issue_counts": {
+                "high": _issue_count(self.qa_review, "high"),
+                "medium": _issue_count(self.qa_review, "medium"),
+                "low": _issue_count(self.qa_review, "low"),
+            },
+            "qa_issue_categories": sorted(_issue_categories(self.qa_review)),
+            "qa_issues": [
+                issue.model_dump(mode="json")
+                for issue in self.qa_review.issues
+            ],
+        }
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -56,6 +82,27 @@ def _issue_count(review: QAReview, severity: str) -> int:
 
 def _issue_categories(review: QAReview) -> set[str]:
     return {issue.category for issue in review.issues if issue.category is not None}
+
+
+def _issue_details(
+    review: QAReview,
+    *,
+    severity: str | None = None,
+    categories: set[str] | None = None,
+) -> list[str]:
+    details: list[str] = []
+    for issue in review.issues:
+        if severity is not None and issue.severity != severity:
+            continue
+        if categories is not None and issue.category not in categories:
+            continue
+        category = issue.category or "uncategorized"
+        details.append(f"{issue.severity}/{category}: {issue.problem}")
+    return details
+
+
+def _detail_or_default(details: list[str], default: str) -> str:
+    return default if not details else "; ".join(details)
 
 
 def _claim_source_ids(ledger: EvidenceLedger) -> set[str]:
@@ -215,25 +262,35 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
         for issue in review.issues
         if issue.severity == "high" and issue.category == "unsupported_claim"
     )
+    unsupported_details = _issue_details(
+        review,
+        severity="high",
+        categories={"unsupported_claim"},
+    )
     checks.append(
         CheckResult(
             name="unsupported_claims",
             passed=high_unsupported <= int(expected_qa.get("max_high_unsupported_claims", 0)),
-            detail=f"{high_unsupported} high unsupported-claim issues",
+            detail=_detail_or_default(
+                unsupported_details,
+                f"{high_unsupported} high unsupported-claim issues",
+            ),
         )
     )
 
+    grounding_details = _issue_details(
+        review,
+        severity="high",
+        categories={"unsupported_claim", "source_gap"},
+    )
     checks.append(
         CheckResult(
             name="source_grounding",
-            passed=not any(
-                issue.severity == "high"
-                and issue.category in {"unsupported_claim", "source_gap"}
-                for issue in review.issues
+            passed=not grounding_details,
+            detail=_detail_or_default(
+                grounding_details,
+                "no high-severity grounding issues",
             ),
-            detail="no high-severity grounding issues"
-            if not any(issue.severity == "high" for issue in review.issues)
-            else "high-severity issues present",
         )
     )
 
@@ -256,6 +313,19 @@ def load_fixtures(fixtures_dir: Path) -> list[dict[str, Any]]:
     return [_load_json(path) for path in paths]
 
 
+def results_to_dict(results: list[FixtureResult]) -> dict[str, Any]:
+    passed_count = sum(1 for result in results if result.passed)
+    fixture_count = len(results)
+    return {
+        "fixture_count": fixture_count,
+        "passed_count": passed_count,
+        "failed_count": fixture_count - passed_count,
+        "all_passed": passed_count == fixture_count,
+        "rubrics": list(RUBRIC_NAMES),
+        "fixtures": [result.to_dict() for result in results],
+    }
+
+
 def render_scorecard(results: list[FixtureResult]) -> str:
     passed_count = sum(1 for result in results if result.passed)
     lines = [
@@ -265,18 +335,42 @@ def render_scorecard(results: list[FixtureResult]) -> str:
         f"- Result: {passed_count}/{len(results)} fixtures passed",
         f"- Rubrics: {', '.join(RUBRIC_NAMES)}",
         "",
-        "| Fixture | Status | Score | High | Medium | Low |",
-        "| --- | --- | ---: | ---: | ---: | ---: |",
+        "| Fixture | Name | Status | Score | High | Medium | Low |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
     ]
     for result in results:
         status = "PASS" if result.passed else "FAIL"
         lines.append(
             "| "
-            f"{result.fixture_id} | {status} | {result.score} | "
+            f"{result.fixture_id} | {result.name} | {status} | {result.score} | "
             f"{_issue_count(result.qa_review, 'high')} | "
             f"{_issue_count(result.qa_review, 'medium')} | "
             f"{_issue_count(result.qa_review, 'low')} |"
         )
+
+    lines.extend(["", "## Fixture Details"])
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        lines.extend(
+            [
+                "",
+                f"### {result.fixture_id} - {result.name}",
+                "",
+                f"- Total: {status} ({result.score})",
+                "- Checks:",
+            ]
+        )
+        for check in result.checks:
+            check_status = "PASS" if check.passed else "FAIL"
+            lines.append(f"  - {check.name}: {check_status} - {check.detail}")
+        if result.qa_review.issues:
+            lines.append("- QA issues:")
+            for issue in result.qa_review.issues:
+                category = issue.category or "uncategorized"
+                lines.append(
+                    f"  - {issue.severity}/{category}: {issue.problem} "
+                    f"Fix: {issue.suggested_fix}"
+                )
 
     failed = [result for result in results if not result.passed]
     if failed:
@@ -311,12 +405,24 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional path to write the markdown scorecard.",
     )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional path to write machine-readable JSON results.",
+    )
     args = parser.parse_args(argv)
 
     results, scorecard = run(args.fixtures_dir)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(scorecard, encoding="utf-8")
+    if args.json_output is not None:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(
+            json.dumps(results_to_dict(results), indent=2) + "\n",
+            encoding="utf-8",
+        )
     print(scorecard, end="")
     return 0 if all(result.passed for result in results) else 1
 

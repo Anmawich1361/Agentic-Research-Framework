@@ -2,7 +2,7 @@ VENV := .venv
 VENV_PYTHON := $(VENV)/bin/python
 ARF := $(VENV)/bin/arf
 
-.PHONY: setup reset-env doctor check smoke-mock smoke-live-checkpoint install test lint typecheck mock-run clean ensure-venv
+.PHONY: setup reset-env doctor check smoke-mock smoke-live-checkpoint eval install test lint typecheck mock-run clean ensure-venv
 
 setup:
 	@if [ ! -x "$(VENV_PYTHON)" ]; then \
@@ -38,6 +38,9 @@ typecheck: ensure-venv
 	$(VENV_PYTHON) -m mypy src
 
 check: test lint typecheck
+
+eval: ensure-venv
+	$(VENV_PYTHON) evals/run_eval.py
 
 smoke-mock: ensure-venv
 	$(ARF) run "Research Nvidia before an investor meeting" --mock --checkpoint-only
