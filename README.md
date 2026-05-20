@@ -29,6 +29,13 @@ when QA is requested, QA runs, and there are no high-severity QA issues.
 For the post-PR #5 and PR #6 state, see
 [`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md).
 
+Core reference docs:
+
+- [Artifact contract](docs/ARTIFACT_CONTRACT.md)
+- [Run status contract](docs/RUN_STATUS.md)
+- [Local development](docs/LOCAL_DEVELOPMENT.md)
+- [Current status](docs/CURRENT_STATUS.md)
+
 ## Setup
 
 Use the Makefile targets instead of manually setting `PYTHONPATH`.

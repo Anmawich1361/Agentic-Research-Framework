@@ -8,6 +8,8 @@ runs/<run_id>/
 
 The artifact set depends on how far the workflow gets. Absence of a later-stage
 artifact is meaningful and should be interpreted with `metadata.json.status`.
+For status meanings, report publication expectations, and next actions, see
+the [Run Status Contract](RUN_STATUS.md).
 
 ## Checkpoint Artifacts
 
@@ -98,3 +100,11 @@ Final publication requires:
 
 When any gate blocks, the run should keep the narrowest useful diagnostic
 artifact and avoid writing `report.md`.
+
+## Status Contract
+
+`metadata.json.status` is authoritative. Consumers should read it before using
+artifact presence to infer workflow state. Current statuses are documented in
+the [Run Status Contract](RUN_STATUS.md), including `checkpoint_ready`,
+`evidence_ready`, `evidence_needs_review`, `draft_needs_qa`,
+`draft_needs_revision`, `needs_review`, `report_ready`, and `failed`.
