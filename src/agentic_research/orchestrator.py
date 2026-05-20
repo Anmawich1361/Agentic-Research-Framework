@@ -1105,7 +1105,11 @@ def _source_fetch_log_payload(source_fetch_log: SourceFetchLog | None) -> dict[s
                 "status": result.status,
                 "content_type": result.content_type,
                 "title": result.title,
+                "excerpt": result.excerpt,
                 "error": result.error,
+                "text_char_count": result.text_char_count,
+                "chunk_count": result.chunk_count,
+                "fetched_url": result.fetched_url,
             }
             for result in source_fetch_log.results
         ]
