@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from agentic_research.agents import (
     coerce_agent_output,
@@ -18,7 +18,6 @@ from agentic_research.agents import (
     get_agent_output_type,
     run_agent_sync,
 )
-from agentic_research.artifact_review import write_artifact_review
 from agentic_research.evidence_ledger import (
     EvidenceLedger,
     evidence_claim_content_key,
@@ -47,15 +46,11 @@ from agentic_research.models import (
     SpecialistAnalysis,
     UserFeedback,
 )
-from agentic_research.report_writer import (
-    load_template,
-    render_mock_report,
-    render_source_appendix,
-    select_report_template_name,
-    write_checkpoint,
-    write_json_artifact,
-    write_report_artifacts,
-)
+from agentic_research.report_writer import load_template
+from agentic_research.report_writer import render_mock_report
+from agentic_research.report_writer import render_source_appendix
+from agentic_research.report_writer import select_report_template_name
+from agentic_research.report_writer import write_json_artifact
 from agentic_research.report_validation import (
     ReportSectionValidationError,
     missing_report_sections,
@@ -64,6 +59,13 @@ from agentic_research.report_validation import (
     validate_report_traceability,
 )
 from agentic_research.run_logging import RunLogger
+from agentic_research.run_artifacts import (
+    ResearchRunResult,
+    has_blocking_evidence_warnings as _has_blocking_evidence_warnings,
+    write_checkpoint_artifacts as _write_checkpoint_artifacts,
+    write_failure_artifacts as _write_failure_artifacts,
+    write_report_revision_artifact as _write_report_revision_artifact,
+)
 from agentic_research.qa import (
     has_high_severity_issues,
     merge_qa_reviews,
@@ -80,33 +82,7 @@ from agentic_research.specialists import (
 from agentic_research.tools.web_search import WebSearchClient, build_source_search_queries
 
 
-class ResearchRunResult(BaseModel):
-    metadata: RunMetadata
-    run_dir: Path
-    checkpoint_path: Path
-    charter: ResearchCharter
-    research_plan: ResearchPlan
-    sources: list[SourceCandidate]
-    source_map: SourceMap
-    source_content: list[SourceContent] = Field(default_factory=list)
-    source_fetch_log: SourceFetchLog | None = None
-    user_feedback: UserFeedback | None = None
-    specialist_analyses: list[SpecialistAnalysis] = Field(default_factory=list)
-    evidence_ledger: EvidenceLedgerModel | None = None
-    report: Report | None = None
-    draft_report_path: Path | None = None
-    report_path: Path | None = None
-    qa_review: QAReview | None = None
-
-
 AgentRunner = Callable[[str, Any, str], Any]
-_NON_BLOCKING_EVIDENCE_WARNING_PREFIXES = (
-    "Deduplicated duplicate evidence claim ID ",
-    "Deduplicated near-duplicate evidence claim ID ",
-    "Downgraded evidence claim ID ",
-    "Dropped unsupported evidence claim ID ",
-    "Renamed conflicting specialist evidence claim ID ",
-)
 
 
 def _new_run_id() -> str:
@@ -152,107 +128,6 @@ def _create_run_dir(runs_dir: str | Path | None) -> tuple[str, Path]:
     run_dir = root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_id, run_dir
-
-
-def _duration_seconds(started_at: datetime, completed_at: datetime) -> float:
-    return round((completed_at - started_at).total_seconds(), 3)
-
-
-def _status_reason(status: str) -> str:
-    return {
-        "checkpoint_ready": "Checkpoint artifacts written; awaiting user feedback.",
-        "evidence_ready": "Evidence ledger written and ready for synthesis.",
-        "evidence_needs_review": "Evidence validation produced blocking warnings.",
-        "draft_needs_qa": "Draft report written; QA has not approved final publication.",
-        "draft_needs_revision": "Draft report failed deterministic report validation.",
-        "needs_review": "QA found blocking issues; final report was not written.",
-        "report_ready": "QA passed and final report was written.",
-        "failed": "Run failed before successful completion.",
-    }.get(status, "Run status recorded.")
-
-
-def _write_logged_json_artifact(
-    path: Path,
-    value: Any,
-    run_logger: RunLogger | None,
-) -> None:
-    write_json_artifact(path, value)
-    if run_logger is not None:
-        run_logger.artifact(path)
-
-
-def _write_logged_text_artifact(
-    path: Path,
-    text: str,
-    run_logger: RunLogger | None,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    if run_logger is not None:
-        run_logger.artifact(path)
-
-
-def _failure_report_markdown(
-    *,
-    run_id: str,
-    request: str,
-    error: BaseException,
-) -> str:
-    return (
-        f"# Run Failure: {run_id}\n\n"
-        f"- Request: {request}\n"
-        f"- Error type: {type(error).__name__}\n"
-        f"- Error message: {error}\n\n"
-        "No final report was written for this failed run.\n"
-    )
-
-
-def _write_failure_artifacts(
-    *,
-    run_id: str,
-    run_dir: Path,
-    request: str,
-    mode: str,
-    lens: str | None,
-    mock: bool,
-    model: str | None,
-    run_type: RunType,
-    started_at: datetime,
-    error: BaseException,
-    run_logger: RunLogger | None,
-) -> None:
-    completed_at = datetime.now(timezone.utc)
-    status_reason = f"{type(error).__name__}: {error}"
-    metadata = RunMetadata(
-        run_id=run_id,
-        created_at=started_at.isoformat(),
-        started_at=started_at.isoformat(),
-        completed_at=completed_at.isoformat(),
-        duration_seconds=_duration_seconds(started_at, completed_at),
-        request=request,
-        status="failed",
-        status_reason=status_reason,
-        mode=mode,
-        lens=lens or "general",
-        mock=mock,
-        model=model,
-        run_type=run_type,
-    )
-    _write_logged_json_artifact(run_dir / "metadata.json", metadata, run_logger)
-    _write_logged_json_artifact(
-        run_dir / "error.json",
-        {
-            "error_type": type(error).__name__,
-            "message": str(error),
-            "status_reason": status_reason,
-        },
-        run_logger,
-    )
-    _write_logged_text_artifact(
-        run_dir / "failure_report.md",
-        _failure_report_markdown(run_id=run_id, request=request, error=error),
-        run_logger,
-    )
 
 
 def _resolve_run_dir(run_id_or_path: str | Path, runs_dir: str | Path | None = None) -> Path:
@@ -408,167 +283,8 @@ def _user_feedback_prompt_payload(feedback: UserFeedback) -> dict[str, Any]:
     return payload
 
 
-def _write_checkpoint_artifacts(
-    *,
-    run_id: str,
-    run_dir: Path,
-    request: str,
-    mode: str,
-    mock: bool,
-    charter: ResearchCharter,
-    plan: ResearchPlan,
-    sources: list[SourceCandidate],
-    source_map: SourceMap,
-    source_content: list[SourceContent] | None = None,
-    source_fetch_log: SourceFetchLog | None = None,
-    user_feedback: UserFeedback | None = None,
-    specialist_analyses: list[SpecialistAnalysis] | None = None,
-    evidence_ledger: EvidenceLedgerModel | None = None,
-    report: Report | None = None,
-    qa_review: QAReview | None = None,
-    write_final_report: bool = True,
-    status: str = "checkpoint_ready",
-    started_at: datetime | None = None,
-    model: str | None = None,
-    run_type: RunType = "checkpoint",
-    status_reason: str | None = None,
-    run_logger: RunLogger | None = None,
-) -> ResearchRunResult:
-    completed_at = datetime.now(timezone.utc)
-    effective_started_at = started_at or completed_at
-    metadata = RunMetadata(
-        run_id=run_id,
-        created_at=effective_started_at.isoformat(),
-        started_at=effective_started_at.isoformat(),
-        completed_at=completed_at.isoformat(),
-        duration_seconds=_duration_seconds(effective_started_at, completed_at),
-        request=request,
-        status=status,
-        status_reason=status_reason or _status_reason(status),
-        mode=mode,
-        lens=charter.research_lens,
-        mock=mock,
-        model=model,
-        run_type=run_type,
-    )
-
-    _write_logged_json_artifact(run_dir / "metadata.json", metadata, run_logger)
-    _write_logged_json_artifact(run_dir / "charter.json", charter, run_logger)
-    _write_logged_json_artifact(run_dir / "research_plan.json", plan, run_logger)
-    _write_logged_json_artifact(run_dir / "sources.json", sources, run_logger)
-    _write_logged_json_artifact(run_dir / "source_map.json", source_map, run_logger)
-    if source_content is not None:
-        _write_logged_json_artifact(run_dir / "source_content.json", source_content, run_logger)
-    if source_fetch_log is not None:
-        _write_logged_json_artifact(
-            run_dir / "source_fetch_log.json",
-            source_fetch_log,
-            run_logger,
-        )
-    if user_feedback is not None:
-        _write_logged_json_artifact(run_dir / "user_feedback.json", user_feedback, run_logger)
-    if specialist_analyses:
-        _write_logged_json_artifact(
-            run_dir / "specialist_analyses.json",
-            specialist_analyses,
-            run_logger,
-        )
-    if evidence_ledger is not None:
-        _write_logged_json_artifact(
-            run_dir / "evidence_ledger.json",
-            evidence_ledger,
-            run_logger,
-        )
-    _write_evidence_review_artifact(run_dir, evidence_ledger, status=status)
-    draft_report_path = None
-    report_path = None
-    if report is not None:
-        draft_report_path, report_path = write_report_artifacts(
-            run_dir,
-            report,
-            write_final=write_final_report,
-        )
-        if run_logger is not None:
-            run_logger.artifact(draft_report_path)
-            if report_path is not None:
-                run_logger.artifact(report_path)
-    if qa_review is not None:
-        _write_logged_json_artifact(run_dir / "qa_review.json", qa_review, run_logger)
-    checkpoint_path = write_checkpoint(run_dir, charter, plan, source_map, mock=mock)
-    if run_logger is not None:
-        run_logger.artifact(checkpoint_path)
-    if evidence_ledger is not None or report is not None or qa_review is not None:
-        artifact_review_path = write_artifact_review(run_dir)
-        if run_logger is not None:
-            run_logger.artifact(artifact_review_path)
-
-    return ResearchRunResult(
-        metadata=metadata,
-        run_dir=run_dir,
-        checkpoint_path=checkpoint_path,
-        charter=charter,
-        research_plan=plan,
-        sources=sources,
-        source_map=source_map,
-        source_content=source_content or [],
-        source_fetch_log=source_fetch_log,
-        user_feedback=user_feedback,
-        specialist_analyses=specialist_analyses or [],
-        evidence_ledger=evidence_ledger,
-        report=report,
-        draft_report_path=draft_report_path,
-        report_path=report_path,
-        qa_review=qa_review,
-    )
-
-
 def _source_scores_by_id(source_map: SourceMap) -> dict[str, Any]:
     return {score.source_id: score for score in source_map.scores}
-
-
-def _is_blocking_evidence_warning(warning: str) -> bool:
-    return not warning.startswith(_NON_BLOCKING_EVIDENCE_WARNING_PREFIXES)
-
-
-def _has_blocking_evidence_warnings(evidence_ledger: EvidenceLedgerModel) -> bool:
-    return any(
-        _is_blocking_evidence_warning(warning)
-        for warning in evidence_ledger.validation_warnings
-    )
-
-
-def _evidence_review_markdown(evidence_ledger: EvidenceLedgerModel) -> str:
-    blocking_warnings = [
-        warning
-        for warning in evidence_ledger.validation_warnings
-        if _is_blocking_evidence_warning(warning)
-    ]
-    warning_lines = "\n".join(f"- {warning}" for warning in blocking_warnings)
-    return (
-        "# Evidence Review Required\n\n"
-        "Synthesis and QA were not run because evidence validation produced "
-        "blocking warnings.\n\n"
-        "## Blocking Warnings\n"
-        f"{warning_lines or '- None'}\n"
-    )
-
-
-def _write_evidence_review_artifact(
-    run_dir: Path,
-    evidence_ledger: EvidenceLedgerModel | None,
-    *,
-    status: str,
-) -> None:
-    if (
-        status != "evidence_needs_review"
-        or evidence_ledger is None
-        or not _has_blocking_evidence_warnings(evidence_ledger)
-    ):
-        return
-    (run_dir / "evidence_review.md").write_text(
-        _evidence_review_markdown(evidence_ledger),
-        encoding="utf-8",
-    )
 
 
 def _approved_sources(source_map: SourceMap) -> list[SourceCandidate]:
@@ -1051,39 +767,6 @@ def _synthesis_source_evidence_context(
         "secondary_or_indirect_only": bool(fetched_source_id_set and not fetched_direct_source_ids),
         "warnings": warnings,
     }
-
-
-def _report_revision_markdown(
-    *,
-    error: ReportSectionValidationError,
-    evidence_ledger: EvidenceLedgerModel,
-) -> str:
-    allowed_claim_lines = "\n".join(
-        f"- {claim_id}" for claim_id in _allowed_claim_ids(evidence_ledger)
-    )
-    return (
-        "# Draft Revision Required\n\n"
-        "QA was not run because deterministic pre-QA report validation failed.\n"
-        "No final report was written.\n\n"
-        "## Validation Error\n"
-        f"- {error}\n\n"
-        "## Allowed Claim IDs\n"
-        f"{allowed_claim_lines or '- None'}\n"
-    )
-
-
-def _write_report_revision_artifact(
-    run_dir: Path,
-    *,
-    error: ReportSectionValidationError,
-    evidence_ledger: EvidenceLedgerModel,
-    run_logger: RunLogger | None = None,
-) -> None:
-    _write_logged_text_artifact(
-        run_dir / "report_revision.md",
-        _report_revision_markdown(error=error, evidence_ledger=evidence_ledger),
-        run_logger,
-    )
 
 
 def _section_fill_lines(
