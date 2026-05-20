@@ -4,8 +4,65 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-echo "Removing .venv"
-rm -rf .venv
+VENV_DIR=".venv"
+
+venv_exists() {
+    [ -e "$VENV_DIR" ] || [ -L "$VENV_DIR" ]
+}
+
+deactivate_active_venv() {
+    if command -v deactivate >/dev/null 2>&1; then
+        deactivate || true
+    fi
+}
+
+repair_venv_permissions() {
+    echo "Clearing macOS flags, extended attributes, and permissions on $VENV_DIR"
+
+    if command -v chflags >/dev/null 2>&1; then
+        chflags -R nouchg,noschg,nohidden "$VENV_DIR" 2>/dev/null || true
+    fi
+
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$VENV_DIR" 2>/dev/null || true
+    fi
+
+    chmod -R u+rwX "$VENV_DIR" 2>/dev/null || true
+    find "$VENV_DIR" -name ".DS_Store" -type f -delete 2>/dev/null || true
+}
+
+verify_venv_removed() {
+    if ! venv_exists; then
+        return
+    fi
+
+    echo "Unable to remove .venv." >&2
+    echo "Close shells, editors, or file-sync processes using .venv, then run 'make reset-env' again." >&2
+    echo "Remaining .venv entries:" >&2
+    find "$VENV_DIR" -maxdepth 5 -print 2>/dev/null | sed "s/^/  /" >&2 || true
+    exit 1
+}
+
+remove_venv() {
+    if ! venv_exists; then
+        return
+    fi
+
+    echo "Removing .venv"
+    rm -rf "$VENV_DIR" 2>/dev/null || true
+
+    if venv_exists; then
+        echo "Initial .venv removal did not complete; retrying after cleanup"
+        repair_venv_permissions
+        rm -rf "$VENV_DIR" 2>/dev/null || true
+    fi
+
+    verify_venv_removed
+    echo "Verified .venv was removed"
+}
+
+deactivate_active_venv
+remove_venv
 
 echo "Creating .venv with python3"
 python3 -m venv .venv

@@ -23,6 +23,7 @@ def main() -> int:
     _print_pip_executable()
     _print_sys_path()
     _print_pythonpath_status()
+    _verify_pytest()
 
     package_file = _verify_import()
     print(f"agentic_research.__file__: {package_file}")
@@ -75,8 +76,64 @@ def _print_sys_path() -> None:
 def _print_pythonpath_status() -> None:
     pythonpath = os.environ.get("PYTHONPATH", "")
     repo_src = str((PROJECT_ROOT / "src").resolve())
-    includes_repo_src = repo_src in {str(Path(item).resolve()) for item in pythonpath.split(os.pathsep) if item}
+    includes_repo_src = repo_src in {
+        str(Path(item).resolve()) for item in pythonpath.split(os.pathsep) if item
+    }
     print(f"PYTHONPATH includes repo src: {includes_repo_src}")
+
+
+def _verify_pytest() -> None:
+    pytest = PROJECT_ROOT / ".venv" / "bin" / "pytest"
+    python = PROJECT_ROOT / ".venv" / "bin" / "python"
+
+    if not pytest.exists():
+        _fail("Missing .venv/bin/pytest. Run 'make reset-env'.")
+
+    result = subprocess.run(
+        [str(pytest), "--version"],
+        cwd=PROJECT_ROOT,
+        env=_env_without_pythonpath(),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        _fail(
+            ".venv/bin/pytest --version failed. Pytest is broken or shadowed. "
+            "Run 'make reset-env'.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    print(f".venv/bin/pytest --version: {result.stdout.strip()}")
+
+    import_result = subprocess.run(
+        [str(python), "-c", "import pytest; print(pytest.__file__)"],
+        cwd=PROJECT_ROOT,
+        env=_env_without_pythonpath(),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if import_result.returncode != 0:
+        _fail(
+            ".venv/bin/python could not import pytest. Pytest is broken or shadowed. "
+            "Run 'make reset-env'.\n"
+            f"stdout:\n{import_result.stdout}\nstderr:\n{import_result.stderr}"
+        )
+
+    pytest_file_text = import_result.stdout.strip()
+    if not pytest_file_text or pytest_file_text == "None":
+        _fail(
+            ".venv/bin/python imported pytest without a real pytest.__file__. "
+            "Pytest is broken or shadowed. Run 'make reset-env'."
+        )
+
+    pytest_file = Path(pytest_file_text).resolve()
+    if not _is_relative_to(pytest_file, PROJECT_ROOT / ".venv"):
+        _fail(
+            "pytest is not importing from this repo's .venv. "
+            f"Got {pytest_file}. Run 'make reset-env'."
+        )
+    print(f"pytest.__file__: {pytest_file}")
 
 
 def _verify_import() -> Path:
@@ -111,12 +168,10 @@ def _verify_arf_help() -> None:
     if not arf.exists():
         _fail("Missing .venv/bin/arf. Run 'make setup' or 'make reset-env'.")
 
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
     result = subprocess.run(
         [str(arf), "--help"],
         cwd=PROJECT_ROOT,
-        env=env,
+        env=_env_without_pythonpath(),
         capture_output=True,
         check=False,
         text=True,
@@ -168,6 +223,12 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _env_without_pythonpath() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    return env
 
 
 def _fail(message: str, exc: Exception | None = None) -> None:
