@@ -24,6 +24,7 @@ from agentic_research.models import (
 )
 from agentic_research.orchestrator import (
     _deduplicate_claims,
+    _merge_specialist_claims,
     _source_content_payload,
     _synthesis_source_evidence_context,
     _validate_evidence,
@@ -84,6 +85,62 @@ def _json_payload_from_prompt(prompt: str) -> dict[str, Any]:
     return parsed
 
 
+def _sec_source_map(
+    *,
+    source_id: str = "s1",
+    url: str = "https://www.sec.gov/Archives/edgar/data/909832/000090983225000101/cost-20250831.htm",
+) -> SourceMap:
+    return SourceMap(
+        sources=[
+            SourceCandidate(
+                id=source_id,
+                title="Costco Wholesale Corporation Annual Report (Form 10-K)",
+                publisher="U.S. Securities and Exchange Commission",
+                url=url,
+                source_type="corporate_filing",
+                relevance_rationale="Primary filing for Costco business facts.",
+                recommended_uses=["business model"],
+                bias_risk="low",
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id=source_id,
+                authority_score=5,
+                relevance_score=5,
+                recency_score=5,
+                coverage_score=5,
+                bias_risk="low",
+                final_score=5,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+
+
+def _costco_cash_flow_claim(
+    *,
+    claim_id: str = "c9",
+    source_url: str = "https://www.sec.gov/Archives/edgar/data/909832/000090983225000101/cost-20250831.htm",
+) -> EvidenceClaim:
+    return EvidenceClaim(
+        id=claim_id,
+        claim="Costco says its cash flow from operations is primarily from net sales and membership fees.",
+        claim_type="fact",
+        source_id="s1",
+        source_title="Costco Wholesale Corporation Annual Report (Form 10-K)",
+        source_url=source_url,
+        source_type="corporate_filing",
+        confidence="high",
+        report_section="Company snapshot and business model",
+        quote_or_excerpt=(
+            "Our cash flow provided by operations is primarily from net sales "
+            "and membership fees."
+        ),
+    )
+
+
 def test_deduplicate_claims_drops_near_duplicate_specialist_claim_before_renaming() -> None:
     base_campaign_claim = EvidenceClaim(
         id="c12",
@@ -128,6 +185,292 @@ def test_deduplicate_claims_drops_near_duplicate_specialist_claim_before_renamin
 
     assert [claim.id for claim in claims] == ["c12", "e13"]
     assert any("Deduplicated near-duplicate evidence claim ID e13" in warning for warning in warnings)
+
+
+def test_specialist_duplicate_with_stale_sec_url_is_deduplicated_before_validation() -> None:
+    source_map = _sec_source_map()
+    stale_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983025000101/cost-20250831.htm"
+    base_ledger = _validate_evidence([_costco_cash_flow_claim()], source_map=source_map)
+    specialist = SpecialistAnalysis(
+        specialist="news",
+        summary="News specialist repeated a base filing claim.",
+        source_ids=["s1"],
+        evidence_claims=[_costco_cash_flow_claim(source_url=stale_url)],
+    )
+
+    merged = _merge_specialist_claims(base_ledger, [specialist], source_map=source_map)
+
+    assert [claim.id for claim in merged.claims] == ["c9"]
+    assert merged.claims[0].source_url == source_map.sources[0].url
+    assert not any("specialist_news_c9" in warning for warning in merged.validation_warnings)
+    assert not any("does not match source map URL" in warning for warning in merged.validation_warnings)
+
+
+def test_specialist_distinct_claim_with_stale_sec_url_is_normalized_to_source_map() -> None:
+    source_map = _sec_source_map()
+    stale_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983025000101/cost-20250831.htm"
+    base_ledger = _validate_evidence([_costco_cash_flow_claim()], source_map=source_map)
+    specialist = SpecialistAnalysis(
+        specialist="news",
+        summary="News specialist added a distinct filing claim.",
+        source_ids=["s1"],
+        evidence_claims=[
+            EvidenceClaim(
+                id="r1",
+                claim="Costco said net sales were an important driver of profitability.",
+                claim_type="fact",
+                source_id="s1",
+                source_title="Costco Wholesale Corporation Annual Report (Form 10-K)",
+                source_url=stale_url,
+                source_type="corporate_filing",
+                confidence="high",
+                report_section="Company snapshot and business model",
+                quote_or_excerpt=(
+                    "We believe that the most important driver of our profitability "
+                    "is increasing net sales."
+                ),
+            )
+        ],
+    )
+
+    merged = _merge_specialist_claims(base_ledger, [specialist], source_map=source_map)
+
+    normalized_claim = next(claim for claim in merged.claims if claim.id == "r1")
+    assert normalized_claim.source_url == source_map.sources[0].url
+    assert not any("does not match source map URL" in warning for warning in merged.validation_warnings)
+
+
+def test_materially_conflicting_source_id_and_source_url_still_blocks() -> None:
+    source_map = _sec_source_map()
+
+    ledger = _validate_evidence(
+        [
+            _costco_cash_flow_claim(
+                source_url="https://example.com/not-the-sec-filing"
+            )
+        ],
+        source_map=source_map,
+    )
+
+    assert any("does not match source map URL" in warning for warning in ledger.validation_warnings)
+
+
+def test_claim_from_failed_nonfallback_source_is_dropped_before_synthesis() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="s1",
+                title="Costco supplier standards",
+                publisher="Costco",
+                url="https://www.costco.com/supplier-standards-and-guidelines.html",
+                source_type="primary_company",
+                relevance_rationale="Supplier standards page.",
+                recommended_uses=["supplier context"],
+                bias_risk="medium",
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="s1",
+                authority_score=4,
+                relevance_score=4,
+                recency_score=3,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=4,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+    source_fetch_log = SourceFetchLog(
+        results=[
+            SourceFetchResult(
+                source_id="s1",
+                url="https://www.costco.com/supplier-standards-and-guidelines.html",
+                status="failed",
+                failure_reason="bot_access_block",
+            )
+        ]
+    )
+
+    ledger = _validate_evidence(
+        [
+            EvidenceClaim(
+                id="r13",
+                claim=(
+                    "Costco's supplier standards and guidelines page indicates "
+                    "that vendors should expect formal expectations around quality."
+                ),
+                claim_type="fact",
+                source_id="s1",
+                source_title="Costco supplier standards",
+                source_url="https://www.costco.com/supplier-standards-and-guidelines.html",
+                source_type="primary_company",
+                confidence="high",
+                report_section="supplier_context",
+            )
+        ],
+        source_map=source_map,
+        source_fetch_log=source_fetch_log,
+    )
+
+    assert ledger.claims == []
+    assert any(
+        "source s1 fetch status failed produced no usable source text" in warning
+        for warning in ledger.validation_warnings
+    )
+
+
+def test_full_qa_run_with_fetched_sec_content_and_duplicate_specialist_reaches_qa(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    calls: list[str] = []
+    original_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983224000012/cost-20240831.htm"
+    final_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983225000101/cost-20250831.htm"
+    stale_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983025000101/cost-20250831.htm"
+    monkeypatch.setattr("agentic_research.orchestrator.create_agent_set", _dummy_agent_set)
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before a supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers know about Costco?"],
+                report_sections=["Company snapshot and business model"],
+                required_source_types=["corporate_filing"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="s1",
+                        title="Costco Wholesale Corporation Annual Report (Form 10-K)",
+                        publisher="U.S. Securities and Exchange Commission",
+                        url=original_url,
+                        source_type="corporate_filing",
+                        relevance_rationale="Primary filing for Costco business facts.",
+                        recommended_uses=["business model"],
+                        bias_risk="low",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            payload = _json_payload_from_prompt(prompt)
+            assert payload["source_map"]["sources"][0]["url"] == final_url
+            assert payload["source_content"][0]["url"] == final_url
+            return EvidenceExtractionResult(claims=[_costco_cash_flow_claim()])
+        if agent_key == "news":
+            return SpecialistAnalysis(
+                specialist="news",
+                summary="News specialist repeated the base filing claim.",
+                source_ids=["s1"],
+                evidence_claims=[_costco_cash_flow_claim(source_url=stale_url)],
+            )
+        if agent_key in {"competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis stays anchored to the ledger.",
+                source_ids=["s1"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\n"
+                    "Costco says its cash flow from operations is primarily "
+                    "from net sales and membership fees. [c9]\n\n"
+                    "## Key Findings\n"
+                    "- Costco says its cash flow from operations is primarily "
+                    "from net sales and membership fees. [c9]\n\n"
+                    "## Business Overview\n"
+                    "Costco cash flow context is filing-backed. [c9]\n\n"
+                    "## Competitors\n"
+                    "Competitor-specific evidence was not fetched.\n\n"
+                    "## Risks\n"
+                    "Supplier category specifics were not verified.\n\n"
+                    "## Open Questions\n"
+                    "- Which supplier category should be prioritized?\n\n"
+                    "## What We Do Not Know\n"
+                    "- Category-specific supplier requirements were not verified.\n\n"
+                    "## Source Appendix\n"
+                    f"- Costco Wholesale Corporation Annual Report (s1): {final_url}\n"
+                ),
+                source_ids=["s1"],
+                claim_ids=["c9"],
+            )
+        if agent_key == "qa":
+            return QAReview(
+                ready_to_publish=False,
+                issues=[
+                    QAIssue(
+                        severity="high",
+                        problem="The draft is too thin for supplier-meeting use.",
+                        suggested_fix="Add category-specific supplier evidence.",
+                        affected_section="Key Findings",
+                    )
+                ],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    def sec_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
+        return SourceHttpResponse(
+            url=final_url,
+            status_code=200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=(
+                "<html><head><title>cost-20250831</title></head><body><main>"
+                "<p>Our cash flow provided by operations is primarily from net "
+                "sales and membership fees.</p></main></body></html>"
+            ),
+        )
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=sec_fetcher,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    assert calls == [
+        "intake",
+        "planner",
+        "source_discovery",
+        "evidence_extraction",
+        "news",
+        "competitor",
+        "risk",
+        "synthesis",
+        "qa",
+    ]
+    assert result.metadata.status == "needs_review"
+    assert result.evidence_ledger is not None
+    assert [claim.id for claim in result.evidence_ledger.claims] == ["c9"]
+    assert result.evidence_ledger.claims[0].source_url == final_url
+    assert not any(
+        "specialist_news_c9" in warning
+        for warning in result.evidence_ledger.validation_warnings
+    )
+    assert (run_dir / "draft_report.md").exists()
+    assert (run_dir / "qa_review.json").exists()
+    assert not (run_dir / "report.md").exists()
 
 
 def test_source_content_payload_bounds_chunks_for_agent_context() -> None:

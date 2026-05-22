@@ -336,6 +336,115 @@ def _source_map_with_fetched_urls(
     return source_map.model_copy(update={"sources": sources})
 
 
+def _sec_archive_document_identity(url: str | None) -> tuple[str, str] | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.netloc.lower().endswith("sec.gov"):
+        return None
+    match = re.search(
+        r"/Archives/edgar/data/(\d+)/\d+/([^/?#]+)$",
+        parsed.path,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return str(int(match.group(1))), match.group(2).lower()
+
+
+def _is_repairable_stale_source_url(
+    *,
+    claim_url: str | None,
+    source_url: str,
+) -> bool:
+    if not claim_url:
+        return True
+    if _normalized_url(claim_url) == _normalized_url(source_url):
+        return True
+    claim_sec_identity = _sec_archive_document_identity(claim_url)
+    source_sec_identity = _sec_archive_document_identity(source_url)
+    return (
+        claim_sec_identity is not None
+        and source_sec_identity is not None
+        and claim_sec_identity == source_sec_identity
+    )
+
+
+def _normalize_claim_source_urls_for_source_map(
+    claims: list[EvidenceClaim],
+    *,
+    source_map: SourceMap,
+) -> tuple[list[EvidenceClaim], list[str]]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    normalized_claims: list[EvidenceClaim] = []
+    warnings: list[str] = []
+
+    for claim in claims:
+        source = source_lookup.get(claim.source_id) if claim.source_id else None
+        source_url = source.url.strip() if source is not None else ""
+        if not source_url or not _is_repairable_stale_source_url(
+            claim_url=claim.source_url,
+            source_url=source_url,
+        ):
+            normalized_claims.append(claim)
+            continue
+
+        if claim.source_url != source_url:
+            if claim.source_url:
+                warnings.append(
+                    "Repaired stale source_url for evidence claim ID "
+                    f"{claim.id}: replaced {claim.source_url} with final "
+                    f"source_map URL {source_url}."
+                )
+            normalized_claims.append(claim.model_copy(update={"source_url": source_url}))
+            continue
+
+        normalized_claims.append(claim)
+
+    return normalized_claims, warnings
+
+
+def _normalize_specialist_claim_source_urls_for_source_map(
+    specialist_analyses: list[SpecialistAnalysis],
+    *,
+    source_map: SourceMap,
+) -> tuple[list[SpecialistAnalysis], list[str]]:
+    normalized_analyses: list[SpecialistAnalysis] = []
+    warnings: list[str] = []
+    for analysis in specialist_analyses:
+        normalized_claims, claim_warnings = _normalize_claim_source_urls_for_source_map(
+            analysis.evidence_claims,
+            source_map=source_map,
+        )
+        warnings.extend(claim_warnings)
+        normalized_analyses.append(
+            analysis.model_copy(update={"evidence_claims": normalized_claims})
+        )
+    return normalized_analyses, warnings
+
+
+def _failed_source_metadata_claim(claim: EvidenceClaim) -> bool:
+    raw_text = " ".join(claim.claim.lower().split())
+    metadata_markers = (
+        "page indicates",
+        "page suggests",
+        "source indicates",
+        "source suggests",
+        "website indicates",
+        "website suggests",
+        "materials indicate",
+        "materials suggest",
+        "program suggests",
+    )
+    if any(marker in raw_text for marker in metadata_markers):
+        return True
+    sensitive_topics = ("supplier", "strategy", "recent development", "recent performance")
+    weak_metadata_verbs = ("indicates", "suggests", "appears", "points to")
+    return any(topic in raw_text for topic in sensitive_topics) and any(
+        verb in raw_text for verb in weak_metadata_verbs
+    )
+
+
 def _claim_id_part(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
     return normalized or "claim"
@@ -449,10 +558,15 @@ def _sanitize_evidence_claims_for_synthesis(
     claims: list[EvidenceClaim],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
     high_confidence_authority_floor: float = 4,
 ) -> tuple[list[EvidenceClaim], list[str]]:
     source_lookup = {source.id: source for source in source_map.sources}
     score_lookup = _source_scores_by_id(source_map)
+    fetch_result_lookup = {
+        result.source_id: result
+        for result in (source_fetch_log.results if source_fetch_log is not None else [])
+    }
     sanitized_claims: list[EvidenceClaim] = []
     warnings: list[str] = []
 
@@ -477,6 +591,29 @@ def _sanitize_evidence_claims_for_synthesis(
                 continue
 
         quality_category = classify_evidence_claim(claim)
+        fetch_result = fetch_result_lookup.get(claim.source_id) if claim.source_id else None
+        if fetch_result is not None and fetch_result.status in {"failed", "skipped"}:
+            if quality_category in {
+                "source_metadata_only",
+                "source_finding_aid",
+                "unsupported_or_unclear",
+            } or _failed_source_metadata_claim(claim):
+                warnings.append(
+                    "Dropped unsupported evidence claim ID "
+                    f"{claim.id} before synthesis: source {claim.source_id} fetch "
+                    f"status {fetch_result.status} produced no usable source text."
+                )
+                continue
+            if claim.confidence == "high":
+                sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
+                warnings.append(
+                    "Downgraded evidence claim ID "
+                    f"{claim.id} from high to medium confidence before synthesis: "
+                    f"source {claim.source_id} fetch status {fetch_result.status} "
+                    "produced no usable source text."
+                )
+                continue
+
         if quality_category in {
             "source_metadata_only",
             "source_finding_aid",
@@ -500,6 +637,17 @@ def _sanitize_evidence_claims_for_synthesis(
                 "Downgraded evidence claim ID "
                 f"{claim.id} from high to medium confidence before synthesis: "
                 f"source {score.source_id} authority is {score.authority_score}."
+            )
+            continue
+
+        if fetch_result is not None and fetch_result.status == "fallback" and (
+            claim.confidence == "high"
+        ):
+            sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
+            warnings.append(
+                "Downgraded evidence claim ID "
+                f"{claim.id} from high to medium confidence before synthesis: "
+                f"source {claim.source_id} only had weak fallback context."
             )
             continue
 
@@ -548,16 +696,23 @@ def _validate_evidence(
     claims: list[EvidenceClaim],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
 ) -> EvidenceLedgerModel:
-    deduped_claims, dedupe_warnings = _deduplicate_claims(claims)
+    normalized_claims, normalization_warnings = _normalize_claim_source_urls_for_source_map(
+        claims,
+        source_map=source_map,
+    )
+    deduped_claims, dedupe_warnings = _deduplicate_claims(normalized_claims)
     sanitized_claims, sanitization_warnings = _sanitize_evidence_claims_for_synthesis(
         deduped_claims,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
     ledger = EvidenceLedger(sanitized_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
     sufficiency_warnings = [] if ledger.claims else [EMPTY_EVIDENCE_WARNING]
     ledger.validation_warnings = [
+        *normalization_warnings,
         *dedupe_warnings,
         *sanitization_warnings,
         *sufficiency_warnings,
@@ -636,22 +791,38 @@ def _merge_specialist_claims(
     specialist_analyses: list[SpecialistAnalysis],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
 ) -> EvidenceLedgerModel:
     if not any(analysis.evidence_claims for analysis in specialist_analyses):
         return evidence_ledger
+    normalized_base_claims, base_normalization_warnings = (
+        _normalize_claim_source_urls_for_source_map(
+            evidence_ledger.claims,
+            source_map=source_map,
+        )
+    )
+    normalized_specialist_analyses, specialist_normalization_warnings = (
+        _normalize_specialist_claim_source_urls_for_source_map(
+            specialist_analyses,
+            source_map=source_map,
+        )
+    )
     deduped_claims, dedupe_warnings = _deduplicate_claims(
-        evidence_ledger.claims,
-        specialist_analyses,
+        normalized_base_claims,
+        normalized_specialist_analyses,
     )
     sanitized_claims, sanitization_warnings = _sanitize_evidence_claims_for_synthesis(
         deduped_claims,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
     existing_warnings = list(evidence_ledger.validation_warnings)
     ledger = EvidenceLedger(sanitized_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
     ledger.validation_warnings = [
         *existing_warnings,
+        *base_normalization_warnings,
+        *specialist_normalization_warnings,
         *dedupe_warnings,
         *sanitization_warnings,
         *ledger.validation_warnings,
@@ -1393,7 +1564,11 @@ def _continue_research_impl(
         ),
     )
     run_logger.stage_end("evidence_extraction")
-    evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+    evidence_ledger = _validate_evidence(
+        evidence_result.claims,
+        source_map=source_map,
+        source_fetch_log=source_fetch_log,
+    )
     specialist_analyses: list[SpecialistAnalysis] = []
     if not _has_blocking_evidence_warnings(evidence_ledger):
         run_logger.stage_start("specialists")
@@ -1413,6 +1588,7 @@ def _continue_research_impl(
         evidence_ledger,
         specialist_analyses,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
 
     report = None
@@ -1914,7 +2090,11 @@ def _run_research_impl(
             ),
         )
         run_logger.stage_end("evidence_extraction")
-        evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+        evidence_ledger = _validate_evidence(
+            evidence_result.claims,
+            source_map=source_map,
+            source_fetch_log=source_fetch_log,
+        )
         status = (
             "evidence_needs_review"
             if _has_blocking_evidence_warnings(evidence_ledger)
@@ -1937,6 +2117,7 @@ def _run_research_impl(
             evidence_ledger,
             specialist_analyses,
             source_map=source_map,
+            source_fetch_log=source_fetch_log,
         )
         status = (
             "evidence_needs_review"

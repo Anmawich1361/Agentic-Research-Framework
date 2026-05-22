@@ -58,6 +58,7 @@ NON_BLOCKING_EVIDENCE_WARNING_PREFIXES = (
     "Deduplicated near-duplicate evidence claim ID ",
     "Downgraded evidence claim ID ",
     "Dropped unsupported evidence claim ID ",
+    "Repaired stale source_url for evidence claim ID ",
     "Renamed conflicting specialist evidence claim ID ",
 )
 
