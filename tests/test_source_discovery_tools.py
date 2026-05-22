@@ -32,9 +32,17 @@ def test_build_source_search_queries_targets_required_source_types() -> None:
     queries = build_source_search_queries(_charter(), _plan())
 
     assert queries == [
+        "Costco SEC 10-K annual report site:sec.gov supplier meeting",
         "Costco official company primary source supplier meeting",
         "Costco recent news supplier meeting",
     ]
+
+
+def test_build_source_search_queries_prefers_accessible_sec_filings_for_company() -> None:
+    queries = build_source_search_queries(_charter(), _plan())
+
+    assert queries[0].startswith("Costco SEC 10-K annual report")
+    assert "site:sec.gov" in queries[0]
 
 
 def test_web_search_client_dedupes_mocked_search_results() -> None:

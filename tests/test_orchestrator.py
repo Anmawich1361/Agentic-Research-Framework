@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from agentic_research.models import (
@@ -49,6 +50,31 @@ def _fetcher_with_supplier_content(url: str, timeout_seconds: float) -> SourceHt
 
 def _failing_source_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
     raise TimeoutError("network disabled in tests")
+
+
+class _AnyQuerySearchProvider:
+    def __init__(self, results: list[SearchResult]) -> None:
+        self.results = results
+
+    def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+        return self.results[:max_results]
+
+
+def _dummy_agent_set(**kwargs: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        intake=object(),
+        planner=object(),
+        source_discovery=object(),
+        evidence_extraction=object(),
+        synthesis=object(),
+        qa=object(),
+        industry=object(),
+        competitor=object(),
+        news=object(),
+        risk=object(),
+        financial=object(),
+        filings=object(),
+    )
 
 
 def _json_payload_from_prompt(prompt: str) -> dict[str, Any]:
@@ -1682,6 +1708,247 @@ def test_full_qa_run_with_zero_evidence_claims_stops_before_synthesis(
     assert "evidence extraction prompt/source chunks" in evidence_review
     assert "- Status: evidence_needs_review" in artifact_review
     assert "- Evidence claim count: 0" in artifact_review
+
+
+def test_evidence_prompt_prioritizes_fetched_chunks_over_weak_snippet_fallback(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    captured_payload: dict[str, Any] = {}
+    calls: list[str] = []
+    fetched_supplier_url = "https://www.costco.com/supplier-standards.html"
+    monkeypatch.setattr("agentic_research.orchestrator.create_agent_set", _dummy_agent_set)
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_fetched",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        relevance_rationale="Primary supplier source.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="medium",
+                    ),
+                    SourceCandidate(
+                        id="src_blocked",
+                        title="Costco investor relations overview",
+                        publisher="Costco",
+                        url="https://investor.costco.com/overview/default.aspx",
+                        source_type="investor_material",
+                        relevance_rationale="Company investor source.",
+                        recommended_uses=["company updates"],
+                        bias_risk="medium",
+                    ),
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            payload = _json_payload_from_prompt(prompt)
+            captured_payload.update(payload)
+            payload_keys = list(payload)
+            assert payload_keys.index("source_content") < payload_keys.index(
+                "weak_fallback_context"
+            )
+            assert payload["source_content"][0]["source_id"] == "src_fetched"
+            assert payload["source_content"][0]["url"] == fetched_supplier_url
+            assert payload["source_map"]["sources"][0]["url"] == fetched_supplier_url
+            assert payload["approved_sources"][0]["url"] == fetched_supplier_url
+            assert (
+                "Costco requires suppliers to meet delivery windows."
+                in payload["source_content"][0]["chunks"][0]["text"]
+            )
+            assert payload["weak_fallback_context"] == [
+                {
+                    "source_id": "src_blocked",
+                    "url": "https://investor.costco.com/overview/default.aspx",
+                    "title": "Costco investor relations overview",
+                    "publisher": "Costco",
+                    "snippet": "Costco investor relations page exists but may block direct fetches.",
+                    "context_type": "search_snippet_only",
+                    "evidence_strength": "weak",
+                    "caveats": [
+                        "Search-result snippets are not fetched source text.",
+                        "Do not use this context for high-confidence factual claims.",
+                    ],
+                }
+            ]
+            instructions = " ".join(payload["instructions"])
+            assert "No high-confidence claims may come from weak_fallback_context" in instructions
+            return EvidenceExtractionResult(claims=[])
+        if agent_key in {"news", "competitor", "risk", "synthesis", "qa"}:
+            raise AssertionError(f"{agent_key} should not run with zero evidence claims.")
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    def mixed_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
+        if "suppliers.html" in url:
+            response = _fetcher_with_supplier_content(url, timeout_seconds)
+            return response.model_copy(update={"url": fetched_supplier_url})
+        return SourceHttpResponse(
+            url=url,
+            status_code=403,
+            headers={"content-type": "text/html"},
+            text="<html><body>Forbidden</body></html>",
+        )
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=mixed_fetcher,
+        search_client=WebSearchClient(
+            provider=_AnyQuerySearchProvider(
+                [
+                    SearchResult(
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        snippet="Costco supplier expectations and contact information.",
+                    ),
+                    SearchResult(
+                        title="Costco investor relations overview",
+                        publisher="Costco",
+                        url="https://investor.costco.com/overview/default.aspx",
+                        snippet=(
+                            "Costco investor relations page exists but may block direct "
+                            "fetches."
+                        ),
+                    ),
+                ]
+            )
+        ),
+    )
+
+    source_fetch_log = json.loads(
+        (tmp_path / result.metadata.run_id / "source_fetch_log.json").read_text()
+    )
+    assert calls == ["intake", "planner", "source_discovery", "evidence_extraction"]
+    assert captured_payload["weak_fallback_context"][0]["source_id"] == "src_blocked"
+    assert [entry["status"] for entry in source_fetch_log["results"]] == [
+        "fetched",
+        "fallback",
+    ]
+    assert source_fetch_log["results"][0]["url"] == "https://www.costco.com/suppliers.html"
+    assert source_fetch_log["results"][0]["fetched_url"] == fetched_supplier_url
+    assert source_fetch_log["results"][1]["failure_reason"] == "http_403"
+    source_map = json.loads((tmp_path / result.metadata.run_id / "source_map.json").read_text())
+    assert source_map["sources"][0]["url"] == fetched_supplier_url
+
+
+def test_full_qa_run_with_only_weak_snippet_fallback_stops_before_synthesis(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("agentic_research.orchestrator.create_agent_set", _dummy_agent_set)
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["investor_material"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_blocked",
+                        title="Costco investor relations overview",
+                        publisher="Costco",
+                        url="https://investor.costco.com/overview/default.aspx",
+                        source_type="investor_material",
+                        relevance_rationale="Company investor source.",
+                        recommended_uses=["company updates"],
+                        bias_risk="medium",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            payload = _json_payload_from_prompt(prompt)
+            assert payload["source_content"] == []
+            assert payload["weak_fallback_context"][0]["context_type"] == "search_snippet_only"
+            return EvidenceExtractionResult(claims=[])
+        if agent_key in {"news", "competitor", "risk", "synthesis", "qa"}:
+            raise AssertionError(f"{agent_key} should not run with zero usable content.")
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=lambda url, timeout_seconds: SourceHttpResponse(
+            url=url,
+            status_code=403,
+            headers={"content-type": "text/html"},
+            text="<html><body>Forbidden</body></html>",
+        ),
+        search_client=WebSearchClient(
+            provider=_AnyQuerySearchProvider(
+                [
+                    SearchResult(
+                        title="Costco investor relations overview",
+                        publisher="Costco",
+                        url="https://investor.costco.com/overview/default.aspx",
+                        snippet="Costco investor relations page exists.",
+                    )
+                ]
+            )
+        ),
+    )
+
+    run_dir = tmp_path / result.metadata.run_id
+    source_fetch_log = json.loads((run_dir / "source_fetch_log.json").read_text())
+    evidence_review = (run_dir / "evidence_review.md").read_text()
+
+    assert calls == ["intake", "planner", "source_discovery", "evidence_extraction"]
+    assert result.metadata.status == "evidence_needs_review"
+    assert result.evidence_ledger is not None
+    assert result.evidence_ledger.claims == []
+    assert source_fetch_log["results"][0]["status"] == "fallback"
+    assert source_fetch_log["results"][0]["failure_reason"] == "http_403"
+    assert "Fetch results: 0 fetched, 1 fallback, 0 failed, 0 skipped." in evidence_review
+    assert not (run_dir / "draft_report.md").exists()
+    assert not (run_dir / "qa_review.json").exists()
+    assert not (run_dir / "report.md").exists()
 
 
 def test_full_qa_run_with_allowed_claim_ids_reaches_qa_normally(

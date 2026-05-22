@@ -20,7 +20,20 @@ BiasRisk = Literal["low", "medium", "high"]
 ClaimType = Literal["fact", "inference", "opinion", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 Severity = Literal["high", "medium", "low"]
-SourceFetchStatus = Literal["fetched", "failed", "skipped"]
+SourceFetchStatus = Literal["fetched", "failed", "skipped", "fallback"]
+SourceFetchFailureReason = Literal[
+    "http_403",
+    "timeout",
+    "unsupported_content_type",
+    "pdf_skipped",
+    "no_readable_text",
+    "bad_url",
+    "bot_access_block",
+    "http_error",
+    "fetch_error",
+    "pdf_extraction_failed",
+]
+FallbackContextType = Literal["search_snippet_only", "metadata_only"]
 RunType = Literal["checkpoint", "full", "continue"]
 IssueCategory = Literal[
     "unsupported_claim",
@@ -148,6 +161,7 @@ class SourceFetchResult(StrictModel):
     title: str | None = None
     excerpt: str | None = None
     error: str | None = None
+    failure_reason: SourceFetchFailureReason | None = None
     text_char_count: int = 0
     chunk_count: int = 0
     fetched_url: str | None = None
@@ -155,6 +169,17 @@ class SourceFetchResult(StrictModel):
 
 class SourceFetchLog(StrictModel):
     results: list[SourceFetchResult] = Field(default_factory=list)
+
+
+class SourceFallbackContext(StrictModel):
+    source_id: str
+    url: str
+    title: str
+    publisher: str
+    snippet: str | None = None
+    context_type: FallbackContextType
+    evidence_strength: Literal["weak"] = "weak"
+    caveats: list[str] = Field(default_factory=list)
 
 
 class EvidenceClaim(StrictModel):

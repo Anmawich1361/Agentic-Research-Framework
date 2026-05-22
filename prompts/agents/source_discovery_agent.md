@@ -37,6 +37,7 @@ Given a research charter and plan, identify useful sources.
 
 - Prefer primary sources when available.
 - For public companies, look for filings and investor materials.
+- Prefer direct `sec.gov/Archives` 10-K or 10-Q filing URLs over company investor-relations index pages when both are available.
 - For private companies, look for company pages, press releases, product docs, case studies, competitor pages, and trade publications.
 - For industries, look for government data, industry associations, consulting primers, and trade publications.
 - Do not write the report.

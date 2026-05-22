@@ -138,7 +138,7 @@ def test_evidence_review_markdown_explains_empty_claims_without_fetched_content(
     assert "No valid evidence claims were extracted from approved sources." in markdown
     assert "No source content was fetched" in markdown
     assert "source discovery/source ingestion" in markdown
-    assert "Fetch results: 0 fetched, 1 failed, 1 skipped" in markdown
+    assert "Fetch results: 0 fetched, 0 fallback, 1 failed, 1 skipped" in markdown
 
 
 def test_report_revision_markdown_uses_final_evidence_claim_ids() -> None:

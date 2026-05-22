@@ -11,6 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentic_research.models import ResearchCharter, ResearchPlan
 
 
+_SAFE_SEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0 Safari/537.36 agentic-research-framework/0.1"
+    ),
+    "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 class SearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,7 +58,7 @@ class DuckDuckGoSearchProvider:
             params={"q": query},
             timeout=self.timeout_seconds,
             follow_redirects=True,
-            headers={"User-Agent": "agentic-research-framework/0.1"},
+            headers=_SAFE_SEARCH_HEADERS,
         )
         response.raise_for_status()
 
@@ -141,13 +152,26 @@ def _query_context(charter: ResearchCharter, plan: ResearchPlan) -> str:
     return charter.research_lens.replace("_", " ")
 
 
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
 def build_source_search_queries(charter: ResearchCharter, plan: ResearchPlan) -> list[str]:
     context = _query_context(charter, plan)
     queries: list[str] = []
+    if charter.target_type == "company":
+        queries.append(f"{charter.target} SEC 10-K annual report site:sec.gov {context} meeting")
     for source_type in plan.required_source_types:
         phrase = _query_phrase_for_source_type(source_type)
         queries.append(f"{charter.target} {phrase} {context} meeting")
-    return queries
+    return _dedupe_preserving_order(queries)
 
 
 def create_web_search_tool(search_client: WebSearchClient | None = None):
