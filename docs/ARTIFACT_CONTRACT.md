@@ -71,14 +71,17 @@ Source ingestion runs before evidence extraction in full live workflows.
   document.
 - `source_fetch_log.json` is a lightweight operational log. It records
   `source_id`, `url`, `status`, `content_type`, `title`, `error`,
-  `text_char_count`, `chunk_count`, optional `excerpt`, and optional
-  `fetched_url` for redirects.
+  `failure_reason`, `text_char_count`, `chunk_count`, optional `excerpt`, and
+  optional `fetched_url` for redirects. `fallback` status means page fetch did
+  not produce readable source text, but weak search-result context was retained
+  for evidence extraction caveats.
 - `source_fetch_log.json` must not duplicate full extracted text or full chunk
   lists. If downstream research needs text or chunks, it should read
   `source_content.json`.
 
 Evidence extraction should prefer `source_content.json` chunks over source-map
-metadata or search snippets.
+metadata or search snippets. Snippet-only fallback context is weak and should
+not support high-confidence claims.
 
 ## Review and Diagnostic Artifacts
 

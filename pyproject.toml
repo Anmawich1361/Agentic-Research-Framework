@@ -18,6 +18,7 @@ dependencies = [
     "httpx",
     "beautifulsoup4",
     "markdown",
+    "pypdf",
 ]
 
 [project.optional-dependencies]

@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, cast
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -40,6 +41,7 @@ from agentic_research.models import (
     SourceChunk,
     SourceContent,
     SourceDiscoveryResult,
+    SourceFallbackContext,
     SourceFetchLog,
     SourceMap,
     SourceScore,
@@ -80,7 +82,11 @@ from agentic_research.specialists import (
     runnable_specialist_agent_keys,
     select_specialists,
 )
-from agentic_research.tools.web_search import WebSearchClient, build_source_search_queries
+from agentic_research.tools.web_search import (
+    SearchResult,
+    WebSearchClient,
+    build_source_search_queries,
+)
 
 
 AgentRunner = Callable[[str, Any, str], Any]
@@ -302,6 +308,143 @@ def _approved_sources(source_map: SourceMap) -> list[SourceCandidate]:
     return [source_lookup[source_id] for source_id in ordered_ids if source_id in source_lookup]
 
 
+def _source_map_with_fetched_urls(
+    source_map: SourceMap,
+    source_content: list[SourceContent],
+) -> SourceMap:
+    fetched_urls_by_source_id = {
+        content.source_id: content.url.strip()
+        for content in source_content
+        if content.url.strip()
+    }
+    if not fetched_urls_by_source_id:
+        return source_map
+
+    changed = False
+    sources: list[SourceCandidate] = []
+    for source in source_map.sources:
+        fetched_url = fetched_urls_by_source_id.get(source.id)
+        if fetched_url and fetched_url != source.url:
+            sources.append(source.model_copy(update={"url": fetched_url}))
+            changed = True
+        else:
+            sources.append(source)
+
+    if not changed:
+        return source_map
+
+    return source_map.model_copy(update={"sources": sources})
+
+
+def _sec_archive_document_identity(url: str | None) -> tuple[str, str] | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.netloc.lower().endswith("sec.gov"):
+        return None
+    match = re.search(
+        r"/Archives/edgar/data/(\d+)/\d+/([^/?#]+)$",
+        parsed.path,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return str(int(match.group(1))), match.group(2).lower()
+
+
+def _is_repairable_stale_source_url(
+    *,
+    claim_url: str | None,
+    source_url: str,
+) -> bool:
+    if not claim_url:
+        return True
+    if _normalized_url(claim_url) == _normalized_url(source_url):
+        return True
+    claim_sec_identity = _sec_archive_document_identity(claim_url)
+    source_sec_identity = _sec_archive_document_identity(source_url)
+    return (
+        claim_sec_identity is not None
+        and source_sec_identity is not None
+        and claim_sec_identity == source_sec_identity
+    )
+
+
+def _normalize_claim_source_urls_for_source_map(
+    claims: list[EvidenceClaim],
+    *,
+    source_map: SourceMap,
+) -> tuple[list[EvidenceClaim], list[str]]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    normalized_claims: list[EvidenceClaim] = []
+    warnings: list[str] = []
+
+    for claim in claims:
+        source = source_lookup.get(claim.source_id) if claim.source_id else None
+        source_url = source.url.strip() if source is not None else ""
+        if not source_url or not _is_repairable_stale_source_url(
+            claim_url=claim.source_url,
+            source_url=source_url,
+        ):
+            normalized_claims.append(claim)
+            continue
+
+        if claim.source_url != source_url:
+            if claim.source_url:
+                warnings.append(
+                    "Repaired stale source_url for evidence claim ID "
+                    f"{claim.id}: replaced {claim.source_url} with final "
+                    f"source_map URL {source_url}."
+                )
+            normalized_claims.append(claim.model_copy(update={"source_url": source_url}))
+            continue
+
+        normalized_claims.append(claim)
+
+    return normalized_claims, warnings
+
+
+def _normalize_specialist_claim_source_urls_for_source_map(
+    specialist_analyses: list[SpecialistAnalysis],
+    *,
+    source_map: SourceMap,
+) -> tuple[list[SpecialistAnalysis], list[str]]:
+    normalized_analyses: list[SpecialistAnalysis] = []
+    warnings: list[str] = []
+    for analysis in specialist_analyses:
+        normalized_claims, claim_warnings = _normalize_claim_source_urls_for_source_map(
+            analysis.evidence_claims,
+            source_map=source_map,
+        )
+        warnings.extend(claim_warnings)
+        normalized_analyses.append(
+            analysis.model_copy(update={"evidence_claims": normalized_claims})
+        )
+    return normalized_analyses, warnings
+
+
+def _failed_source_metadata_claim(claim: EvidenceClaim) -> bool:
+    raw_text = " ".join(claim.claim.lower().split())
+    metadata_markers = (
+        "page indicates",
+        "page suggests",
+        "source indicates",
+        "source suggests",
+        "website indicates",
+        "website suggests",
+        "materials indicate",
+        "materials suggest",
+        "program suggests",
+    )
+    if any(marker in raw_text for marker in metadata_markers):
+        return True
+    sensitive_topics = ("supplier", "strategy", "recent development", "recent performance")
+    weak_metadata_verbs = ("indicates", "suggests", "appears", "points to")
+    return any(topic in raw_text for topic in sensitive_topics) and any(
+        verb in raw_text for verb in weak_metadata_verbs
+    )
+
+
 def _claim_id_part(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
     return normalized or "claim"
@@ -415,10 +558,15 @@ def _sanitize_evidence_claims_for_synthesis(
     claims: list[EvidenceClaim],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
     high_confidence_authority_floor: float = 4,
 ) -> tuple[list[EvidenceClaim], list[str]]:
     source_lookup = {source.id: source for source in source_map.sources}
     score_lookup = _source_scores_by_id(source_map)
+    fetch_result_lookup = {
+        result.source_id: result
+        for result in (source_fetch_log.results if source_fetch_log is not None else [])
+    }
     sanitized_claims: list[EvidenceClaim] = []
     warnings: list[str] = []
 
@@ -443,6 +591,29 @@ def _sanitize_evidence_claims_for_synthesis(
                 continue
 
         quality_category = classify_evidence_claim(claim)
+        fetch_result = fetch_result_lookup.get(claim.source_id) if claim.source_id else None
+        if fetch_result is not None and fetch_result.status in {"failed", "skipped"}:
+            if quality_category in {
+                "source_metadata_only",
+                "source_finding_aid",
+                "unsupported_or_unclear",
+            } or _failed_source_metadata_claim(claim):
+                warnings.append(
+                    "Dropped unsupported evidence claim ID "
+                    f"{claim.id} before synthesis: source {claim.source_id} fetch "
+                    f"status {fetch_result.status} produced no usable source text."
+                )
+                continue
+            if claim.confidence == "high":
+                sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
+                warnings.append(
+                    "Downgraded evidence claim ID "
+                    f"{claim.id} from high to medium confidence before synthesis: "
+                    f"source {claim.source_id} fetch status {fetch_result.status} "
+                    "produced no usable source text."
+                )
+                continue
+
         if quality_category in {
             "source_metadata_only",
             "source_finding_aid",
@@ -466,6 +637,17 @@ def _sanitize_evidence_claims_for_synthesis(
                 "Downgraded evidence claim ID "
                 f"{claim.id} from high to medium confidence before synthesis: "
                 f"source {score.source_id} authority is {score.authority_score}."
+            )
+            continue
+
+        if fetch_result is not None and fetch_result.status == "fallback" and (
+            claim.confidence == "high"
+        ):
+            sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
+            warnings.append(
+                "Downgraded evidence claim ID "
+                f"{claim.id} from high to medium confidence before synthesis: "
+                f"source {claim.source_id} only had weak fallback context."
             )
             continue
 
@@ -514,16 +696,23 @@ def _validate_evidence(
     claims: list[EvidenceClaim],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
 ) -> EvidenceLedgerModel:
-    deduped_claims, dedupe_warnings = _deduplicate_claims(claims)
+    normalized_claims, normalization_warnings = _normalize_claim_source_urls_for_source_map(
+        claims,
+        source_map=source_map,
+    )
+    deduped_claims, dedupe_warnings = _deduplicate_claims(normalized_claims)
     sanitized_claims, sanitization_warnings = _sanitize_evidence_claims_for_synthesis(
         deduped_claims,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
     ledger = EvidenceLedger(sanitized_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
     sufficiency_warnings = [] if ledger.claims else [EMPTY_EVIDENCE_WARNING]
     ledger.validation_warnings = [
+        *normalization_warnings,
         *dedupe_warnings,
         *sanitization_warnings,
         *sufficiency_warnings,
@@ -602,22 +791,38 @@ def _merge_specialist_claims(
     specialist_analyses: list[SpecialistAnalysis],
     *,
     source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None = None,
 ) -> EvidenceLedgerModel:
     if not any(analysis.evidence_claims for analysis in specialist_analyses):
         return evidence_ledger
+    normalized_base_claims, base_normalization_warnings = (
+        _normalize_claim_source_urls_for_source_map(
+            evidence_ledger.claims,
+            source_map=source_map,
+        )
+    )
+    normalized_specialist_analyses, specialist_normalization_warnings = (
+        _normalize_specialist_claim_source_urls_for_source_map(
+            specialist_analyses,
+            source_map=source_map,
+        )
+    )
     deduped_claims, dedupe_warnings = _deduplicate_claims(
-        evidence_ledger.claims,
-        specialist_analyses,
+        normalized_base_claims,
+        normalized_specialist_analyses,
     )
     sanitized_claims, sanitization_warnings = _sanitize_evidence_claims_for_synthesis(
         deduped_claims,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
     existing_warnings = list(evidence_ledger.validation_warnings)
     ledger = EvidenceLedger(sanitized_claims)
     ledger.validate(source_scores=_source_scores_by_id(source_map), source_map=source_map)
     ledger.validation_warnings = [
         *existing_warnings,
+        *base_normalization_warnings,
+        *specialist_normalization_warnings,
         *dedupe_warnings,
         *sanitization_warnings,
         *ledger.validation_warnings,
@@ -741,7 +946,7 @@ def _synthesis_source_evidence_context(
         failed_or_skipped_source_ids = [
             result.source_id
             for result in source_fetch_log.results
-            if result.status in {"failed", "skipped"}
+            if result.status in {"failed", "skipped", "fallback"}
         ]
 
     warnings: list[str] = []
@@ -886,6 +1091,99 @@ def _source_content_payload(
     return payload
 
 
+def _valid_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _normalized_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(fragment="").geturl().rstrip("/")
+
+
+def _weak_fallback_contexts(
+    *,
+    source_map: SourceMap,
+    raw_search_results: list[SearchResult],
+    source_content: list[SourceContent],
+    source_fetch_log: SourceFetchLog | None,
+) -> list[SourceFallbackContext]:
+    if source_fetch_log is None:
+        return []
+
+    fetched_source_ids = {content.source_id for content in source_content}
+    failed_or_skipped_source_ids = {
+        result.source_id
+        for result in source_fetch_log.results
+        if result.status in {"failed", "skipped"}
+    }
+    search_result_by_url = {
+        _normalized_url(result.url): result
+        for result in raw_search_results
+        if _valid_http_url(result.url)
+    }
+
+    contexts: list[SourceFallbackContext] = []
+    for source in source_map.sources:
+        if source.id in fetched_source_ids or source.id not in failed_or_skipped_source_ids:
+            continue
+        if not _valid_http_url(source.url):
+            continue
+        search_result = search_result_by_url.get(_normalized_url(source.url))
+        if search_result is None:
+            continue
+        if not (search_result.title and search_result.publisher and search_result.snippet):
+            continue
+        contexts.append(
+            SourceFallbackContext(
+                source_id=source.id,
+                url=source.url,
+                title=search_result.title,
+                publisher=search_result.publisher,
+                snippet=search_result.snippet,
+                context_type="search_snippet_only",
+                caveats=[
+                    "Search-result snippets are not fetched source text.",
+                    "Do not use this context for high-confidence factual claims.",
+                ],
+            )
+        )
+    return contexts
+
+
+def _weak_fallback_context_payload(
+    fallback_contexts: list[SourceFallbackContext],
+) -> list[dict[str, Any]]:
+    return [context.model_dump(mode="json") for context in fallback_contexts]
+
+
+def _source_fetch_log_with_fallbacks(
+    source_fetch_log: SourceFetchLog | None,
+    fallback_contexts: list[SourceFallbackContext],
+) -> SourceFetchLog | None:
+    if source_fetch_log is None or not fallback_contexts:
+        return source_fetch_log
+
+    fallback_by_source_id = {context.source_id: context for context in fallback_contexts}
+    updated_results = []
+    for result in source_fetch_log.results:
+        fallback = fallback_by_source_id.get(result.source_id)
+        if fallback is None or result.status not in {"failed", "skipped"}:
+            updated_results.append(result)
+            continue
+        updated_results.append(
+            result.model_copy(
+                update={
+                    "status": "fallback",
+                    "content_type": fallback.context_type,
+                    "title": fallback.title,
+                    "excerpt": fallback.snippet,
+                }
+            )
+        )
+    return SourceFetchLog(results=updated_results)
+
+
 def _select_source_chunks(
     chunks: list[SourceChunk],
     *,
@@ -945,6 +1243,7 @@ def _source_fetch_log_payload(source_fetch_log: SourceFetchLog | None) -> dict[s
                 "title": result.title,
                 "excerpt": result.excerpt,
                 "error": result.error,
+                "failure_reason": result.failure_reason,
                 "text_char_count": result.text_char_count,
                 "chunk_count": result.chunk_count,
                 "fetched_url": result.fetched_url,
@@ -1208,6 +1507,10 @@ def _continue_research_impl(
         status="end",
         fetched_count=len(source_content),
     )
+    source_map = _source_map_with_fetched_urls(source_map, source_content)
+    sources = list(source_map.sources)
+    approved_sources = _approved_sources(source_map)
+    weak_fallback_contexts: list[SourceFallbackContext] = []
     feedback_payload = _user_feedback_prompt_payload(feedback)
     evidence_payload = {
         "charter": charter.model_dump(mode="json"),
@@ -1215,6 +1518,7 @@ def _continue_research_impl(
         "source_map": source_map.model_dump(mode="json"),
         "approved_sources": [source.model_dump(mode="json") for source in approved_sources],
         "source_content": _source_content_payload(source_content),
+        "weak_fallback_context": _weak_fallback_context_payload(weak_fallback_contexts),
         "source_fetch_log": _source_fetch_log_payload(source_fetch_log),
         "source_scores": [
             score.model_dump(mode="json")
@@ -1226,11 +1530,20 @@ def _continue_research_impl(
             "Continue this existing checkpoint run without rediscovering sources.",
             "Extract evidence claims only from approved_sources.",
             "Treat user_feedback as steering context, not as factual evidence.",
+            "Use source_content chunks first; they are stronger than weak_fallback_context.",
             "Prefer source_content chunks over search snippets and source metadata.",
             "The source_content payload is chunk-limited for model context; "
             "use only the provided chunks for quote_or_excerpt.",
             "When source_content is available, quote_or_excerpt must be a short "
             "verbatim substring copied from the fetched source text, not a paraphrase.",
+            "weak_fallback_context is search-result or metadata-only context, "
+            "not fetched source text.",
+            "No high-confidence claims may come from weak_fallback_context or "
+            "snippet-only fallback.",
+            "Do not make supplier, strategy, financial, or recent-development claims "
+            "from metadata alone.",
+            "If only weak_fallback_context is available, produce low-confidence "
+            "caveats or no claims.",
             "If a source fetch failed or was skipped, keep confidence conservative "
             "and do not treat source metadata as evidence.",
             "Every fact claim must include source_id or source_url.",
@@ -1251,7 +1564,11 @@ def _continue_research_impl(
         ),
     )
     run_logger.stage_end("evidence_extraction")
-    evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+    evidence_ledger = _validate_evidence(
+        evidence_result.claims,
+        source_map=source_map,
+        source_fetch_log=source_fetch_log,
+    )
     specialist_analyses: list[SpecialistAnalysis] = []
     if not _has_blocking_evidence_warnings(evidence_ledger):
         run_logger.stage_start("specialists")
@@ -1271,6 +1588,7 @@ def _continue_research_impl(
         evidence_ledger,
         specialist_analyses,
         source_map=source_map,
+        source_fetch_log=source_fetch_log,
     )
 
     report = None
@@ -1710,12 +2028,26 @@ def _run_research_impl(
             status="end",
             fetched_count=len(source_content),
         )
+        source_map = _source_map_with_fetched_urls(source_map, source_content)
+        sources = list(source_map.sources)
+        approved_sources = _approved_sources(source_map)
+        weak_fallback_contexts = _weak_fallback_contexts(
+            source_map=source_map,
+            raw_search_results=raw_search_results,
+            source_content=source_content,
+            source_fetch_log=source_fetch_log,
+        )
+        source_fetch_log = _source_fetch_log_with_fallbacks(
+            source_fetch_log,
+            weak_fallback_contexts,
+        )
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
             "source_map": source_map.model_dump(mode="json"),
             "approved_sources": [source.model_dump(mode="json") for source in approved_sources],
             "source_content": _source_content_payload(source_content),
+            "weak_fallback_context": _weak_fallback_context_payload(weak_fallback_contexts),
             "source_fetch_log": _source_fetch_log_payload(source_fetch_log),
             "source_scores": [
                 score.model_dump(mode="json")
@@ -1724,11 +2056,20 @@ def _run_research_impl(
             ],
             "instructions": [
                 "Extract evidence claims only from approved_sources.",
+                "Use source_content chunks first; they are stronger than weak_fallback_context.",
                 "Prefer source_content chunks over search snippets and source metadata.",
                 "The source_content payload is chunk-limited for model context; "
                 "use only the provided chunks for quote_or_excerpt.",
                 "When source_content is available, quote_or_excerpt must be a short "
                 "verbatim substring copied from the fetched source text, not a paraphrase.",
+                "weak_fallback_context is search-result or metadata-only context, "
+                "not fetched source text.",
+                "No high-confidence claims may come from weak_fallback_context or "
+                "snippet-only fallback.",
+                "Do not make supplier, strategy, financial, or recent-development claims "
+                "from metadata alone.",
+                "If only weak_fallback_context is available, produce low-confidence "
+                "caveats or no claims.",
                 "If a source fetch failed or was skipped, keep confidence conservative "
                 "and do not treat source metadata as evidence.",
                 "Every fact claim must include source_id or source_url.",
@@ -1749,7 +2090,11 @@ def _run_research_impl(
             ),
         )
         run_logger.stage_end("evidence_extraction")
-        evidence_ledger = _validate_evidence(evidence_result.claims, source_map=source_map)
+        evidence_ledger = _validate_evidence(
+            evidence_result.claims,
+            source_map=source_map,
+            source_fetch_log=source_fetch_log,
+        )
         status = (
             "evidence_needs_review"
             if _has_blocking_evidence_warnings(evidence_ledger)
@@ -1772,6 +2117,7 @@ def _run_research_impl(
             evidence_ledger,
             specialist_analyses,
             source_map=source_map,
+            source_fetch_log=source_fetch_log,
         )
         status = (
             "evidence_needs_review"

@@ -58,6 +58,7 @@ NON_BLOCKING_EVIDENCE_WARNING_PREFIXES = (
     "Deduplicated near-duplicate evidence claim ID ",
     "Downgraded evidence claim ID ",
     "Dropped unsupported evidence claim ID ",
+    "Repaired stale source_url for evidence claim ID ",
     "Renamed conflicting specialist evidence claim ID ",
 )
 
@@ -298,18 +299,20 @@ def has_blocking_evidence_warnings(evidence_ledger: EvidenceLedgerModel) -> bool
     )
 
 
-def _source_fetch_counts(source_fetch_log: SourceFetchLog | None) -> tuple[int, int, int]:
+def _source_fetch_counts(source_fetch_log: SourceFetchLog | None) -> tuple[int, int, int, int]:
     if source_fetch_log is None:
-        return 0, 0, 0
-    fetched = failed = skipped = 0
+        return 0, 0, 0, 0
+    fetched = fallback = failed = skipped = 0
     for result in source_fetch_log.results:
         if result.status == "fetched":
             fetched += 1
+        elif result.status == "fallback":
+            fallback += 1
         elif result.status == "failed":
             failed += 1
         elif result.status == "skipped":
             skipped += 1
-    return fetched, failed, skipped
+    return fetched, fallback, failed, skipped
 
 
 def _evidence_sufficiency_lines(
@@ -321,7 +324,9 @@ def _evidence_sufficiency_lines(
     if evidence_ledger.claims:
         return []
 
-    fetched_count, failed_count, skipped_count = _source_fetch_counts(source_fetch_log)
+    fetched_count, fallback_count, failed_count, skipped_count = _source_fetch_counts(
+        source_fetch_log
+    )
     content_count = len(source_content or [])
     lines = [
         f"- {EMPTY_EVIDENCE_WARNING}",
@@ -340,7 +345,8 @@ def _evidence_sufficiency_lines(
     if source_fetch_log is not None:
         lines.append(
             "- Fetch results: "
-            f"{fetched_count} fetched, {failed_count} failed, {skipped_count} skipped."
+            f"{fetched_count} fetched, {fallback_count} fallback, "
+            f"{failed_count} failed, {skipped_count} skipped."
         )
     return lines
 
