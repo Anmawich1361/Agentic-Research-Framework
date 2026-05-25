@@ -86,6 +86,7 @@ from agentic_research.specialists import (
     select_specialists,
 )
 from agentic_research.tools.web_search import (
+    SearchFailure,
     SearchResult,
     WebSearchClient,
     build_source_search_queries,
@@ -188,6 +189,14 @@ def _unique_strings(items: list[str]) -> list[str]:
             seen.add(normalized)
             unique_items.append(normalized)
     return unique_items
+
+
+def _search_failure_gaps(search_failures: list[SearchFailure]) -> list[str]:
+    return [
+        f"Search query failed: {failure.query} "
+        f"({failure.error_type}: {failure.error})"
+        for failure in search_failures
+    ]
 
 
 def merge_user_feedback(existing: UserFeedback, updates: UserFeedback) -> UserFeedback:
@@ -337,6 +346,64 @@ def _source_map_with_fetched_urls(
         return source_map
 
     return source_map.model_copy(update={"sources": sources})
+
+
+def _has_future_dated_marker(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.lower()
+    return "future-dated" in normalized or "future dated" in normalized
+
+
+def _is_fetched_sec_archive_result(result: SourceFetchResult) -> bool:
+    if result.status != "fetched":
+        return False
+    return any(
+        "sec.gov/archives/" in (url or "").lower()
+        for url in (result.url, result.fetched_url)
+    )
+
+
+def _source_map_with_fetch_verification_notes(
+    source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None,
+) -> SourceMap:
+    if source_fetch_log is None:
+        return source_map
+
+    verified_sec_source_ids = {
+        result.source_id
+        for result in source_fetch_log.results
+        if _is_fetched_sec_archive_result(result)
+    }
+    if not verified_sec_source_ids:
+        return source_map
+
+    changed = False
+    sources: list[SourceCandidate] = []
+    for source in source_map.sources:
+        if source.id in verified_sec_source_ids and _has_future_dated_marker(source.notes):
+            sources.append(
+                source.model_copy(
+                    update={"notes": "SEC filing availability verified from fetched text."}
+                )
+            )
+            changed = True
+            continue
+        sources.append(source)
+
+    gaps = list(source_map.gaps)
+    filtered_gaps = [
+        gap
+        for gap in gaps
+        if not (_has_future_dated_marker(gap) and "filing" in gap.lower())
+    ]
+    if len(filtered_gaps) != len(gaps):
+        changed = True
+
+    if not changed:
+        return source_map
+    return source_map.model_copy(update={"sources": sources, "gaps": filtered_gaps})
 
 
 def _sec_archive_document_identity(url: str | None) -> tuple[str, str] | None:
@@ -620,7 +687,7 @@ def _sanitize_evidence_claims_for_synthesis(
             warnings.append(
                 "Dropped unsupported evidence claim ID "
                 f"{claim.id} before synthesis: source {source_label} "
-                f"fetch status {fetch_result.status}."
+                f"fetch status {fetch_result.status} produced no usable source text."
             )
             continue
 
@@ -1341,6 +1408,11 @@ _CONSERVATIVE_REPORT_SOURCE_TYPES = {
     "primary_company",
 }
 
+_DIRECT_COMPANY_EVIDENCE_SOURCE_TYPES = {
+    *_CONSERVATIVE_REPORT_SOURCE_TYPES,
+    "earnings_transcript",
+}
+
 DIRECT_EVIDENCE_SUFFICIENCY_WARNING = (
     "No direct company, filing, investor, or earnings evidence claims remained "
     "after filtering; fetched source content is too indirect for a source-grounded "
@@ -1363,6 +1435,16 @@ def _is_conservative_report_claim(
     return not any(marker in claim_text for marker in _CONSERVATIVE_REPORT_EXCLUDE_MARKERS)
 
 
+def _is_direct_company_evidence_claim(
+    claim: EvidenceClaim,
+    *,
+    source_lookup: dict[str, SourceCandidate],
+) -> bool:
+    source = source_lookup.get(claim.source_id or "")
+    source_type = (claim.source_type or (source.source_type if source else "")).lower()
+    return claim.claim_type == "fact" and source_type in _DIRECT_COMPANY_EVIDENCE_SOURCE_TYPES
+
+
 def _conservative_report_claims(
     evidence_ledger: EvidenceLedgerModel,
     *,
@@ -1376,6 +1458,19 @@ def _conservative_report_claims(
     ]
 
 
+def _direct_company_evidence_claims(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    source_map: SourceMap,
+) -> list[EvidenceClaim]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    return [
+        claim
+        for claim in evidence_ledger.claims
+        if _is_direct_company_evidence_claim(claim, source_lookup=source_lookup)
+    ]
+
+
 def _enforce_direct_company_evidence(
     evidence_ledger: EvidenceLedgerModel,
     *,
@@ -1384,7 +1479,7 @@ def _enforce_direct_company_evidence(
 ) -> EvidenceLedgerModel:
     if charter.target_type != "company" or not evidence_ledger.claims:
         return evidence_ledger
-    if _conservative_report_claims(evidence_ledger, source_map=source_map):
+    if _direct_company_evidence_claims(evidence_ledger, source_map=source_map):
         return evidence_ledger
     if DIRECT_EVIDENCE_SUFFICIENCY_WARNING in evidence_ledger.validation_warnings:
         return evidence_ledger
@@ -1477,6 +1572,7 @@ def _create_conservative_report(
     evidence_ledger: EvidenceLedgerModel,
     source_fetch_log: SourceFetchLog | None,
 ) -> Report:
+    target = charter.target.strip() or "the target company"
     template_name = select_report_template_name(charter)
     required_sections = required_sections_for_report(
         template_name=template_name,
@@ -1516,7 +1612,7 @@ def _create_conservative_report(
         "Executive Summary": [
             (
                 "Available fetched evidence supports only a narrow supplier-meeting "
-                "brief based on directly cited public Costco evidence."
+                f"brief based on directly cited public {target} evidence."
             ),
             (
                 "Do not treat this as verification of latest results, management "
@@ -1527,7 +1623,7 @@ def _create_conservative_report(
         "Context for Meeting": [
             (
                 "Use this as a narrow source-grounded prep note, not as a full account "
-                "of Costco category or buying priorities."
+                f"of {target} category or buying priorities."
             ),
             (
                 "Latest earnings, transcript, or results-release support was not "
@@ -1546,7 +1642,7 @@ def _create_conservative_report(
             ).strip(),
             (
                 "Hypothesis to confirm: supplier recommendations should stay conditional "
-                "until the Costco buyer confirms category, geography, timing, and decision "
+                f"until the buyer at {target} confirms category, geography, timing, and decision "
                 "criteria."
             ),
         ],
@@ -1554,7 +1650,7 @@ def _create_conservative_report(
         or ["Which category, buyer function, geography, and timing should this brief cover?"],
         "Risks and Watchouts": [
             "Public evidence may not reflect the relevant category, buyer, or geography.",
-            "Unsupported recommendations should remain questions until Costco confirms them.",
+            f"Unsupported recommendations should remain questions until {target} confirms them.",
         ],
         "Evidence Limitations": evidence_limitations,
         "Source Appendix": [],
@@ -1593,6 +1689,11 @@ def _create_conservative_report(
     )
 
 
+def _can_apply_supplier_meeting_fallback(charter: ResearchCharter) -> bool:
+    deliverable = charter.deliverable.lower()
+    return select_report_template_name(charter) == "meeting_prep.md" and "meeting" in deliverable
+
+
 def _run_qa_with_conservative_revision(
     *,
     agents: Any,
@@ -1617,6 +1718,10 @@ def _run_qa_with_conservative_revision(
     if not has_high_severity_issues(qa_review):
         return report, qa_review
 
+    template_name = select_report_template_name(charter)
+    if not _can_apply_supplier_meeting_fallback(charter):
+        return report, qa_review
+
     conservative_report = _create_conservative_report(
         charter=charter,
         plan=plan,
@@ -1624,7 +1729,6 @@ def _run_qa_with_conservative_revision(
         evidence_ledger=evidence_ledger,
         source_fetch_log=source_fetch_log,
     )
-    template_name = select_report_template_name(charter)
     try:
         validate_report_traceability(
             conservative_report,
@@ -1872,6 +1976,7 @@ def _continue_research_impl(
         fetched_count=len(source_content),
     )
     source_map = _source_map_with_fetched_urls(source_map, source_content)
+    source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
     sources = list(source_map.sources)
     approved_sources = _approved_sources(source_map)
     weak_fallback_contexts: list[SourceFallbackContext] = []
@@ -2344,10 +2449,12 @@ def _run_research_impl(
         query_count=len(source_search_queries),
     )
     raw_search_results = search_client.search_many(source_search_queries)
+    search_failures = list(search_client.last_failures)
     run_logger.tool_call(
         "web_search",
         status="end",
         result_count=len(raw_search_results),
+        failure_count=len(search_failures),
     )
     source_discovery_payload = {
         "charter": charter.model_dump(mode="json"),
@@ -2381,6 +2488,9 @@ def _run_research_impl(
         required_source_types=plan.required_source_types,
         mock=False,
     )
+    search_failure_gaps = _search_failure_gaps(search_failures)
+    if search_failure_gaps:
+        source_map.gaps.extend(search_failure_gaps)
     if source_discovery.gaps:
         source_map.gaps.extend(source_discovery.gaps)
 
@@ -2417,6 +2527,9 @@ def _run_research_impl(
             source_fetch_log,
             weak_fallback_contexts,
         )
+        source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
+        sources = list(source_map.sources)
+        approved_sources = _approved_sources(source_map)
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),

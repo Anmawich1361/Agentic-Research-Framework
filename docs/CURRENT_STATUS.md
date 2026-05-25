@@ -68,6 +68,43 @@ fetchability. A future improvement should add a more reliable primary-source
 retrieval path for SEC/company filings without turning this into a complex SEC
 parser.
 
+## 2026-05-25 PR #17 Follow-Up Update
+
+This follow-up rebased the PR branch onto `origin/main` and tightened the
+conservative live-QA path without changing publication gates:
+
+- The conservative report fallback now uses `charter.target` instead of
+  hard-coded Costco wording.
+- The supplier-meeting fallback is limited to meeting-prep deliverables instead
+  of being applied to unrelated report templates.
+- Direct evidence sufficiency now accepts fetched primary/company, filing,
+  investor, earnings-release, and earnings-transcript facts even when the claim
+  text includes current/latest/earnings/strategy wording. The stricter
+  current/recent wording filter remains only for conservative fallback claim
+  selection.
+- Failed/skipped source filtering now drops claims by either `source_id` or a
+  matching `source_url`, including URL-only claims.
+- `search_many` still tolerates per-query failures, but failed query diagnostics
+  are recorded and surfaced in `source_map.gaps`.
+- Fetched SEC archive filings clear stale source-map warnings that claimed a
+  retrieved SEC filing was only a future-dated/unverified candidate.
+
+Validation after this follow-up:
+
+- `make doctor`
+- `make check`
+- `make smoke-mock`
+- live Costco full-QA command:
+  `./scripts/load_env_and_run.sh .venv/bin/arf run "Research Costco before a supplier meeting" --full --qa --mode brief --lens sales`
+
+Latest inspected live run: `run_20260525T173247Z_149e704f`.
+
+That run completed with `metadata.status = report_ready`, wrote `report.md`,
+and `qa_review.json` had zero high-severity issues. QA still recorded medium and
+low caveats around missing category/counterpart context, uneven recency, and
+explicitly caveating supplier-meeting inferences. Those are remaining quality
+risks, not publication blockers.
+
 ## Publication Gate
 
 Final report publication remains QA-gated.

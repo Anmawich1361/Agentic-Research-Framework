@@ -24,9 +24,11 @@ from agentic_research.models import (
 )
 from agentic_research.orchestrator import (
     DIRECT_EVIDENCE_SUFFICIENCY_WARNING,
+    _create_conservative_report,
     _deduplicate_claims,
     _merge_specialist_claims,
     _source_content_payload,
+    _source_map_with_fetch_verification_notes,
     _synthesis_source_evidence_context,
     _validate_evidence,
     continue_research,
@@ -60,6 +62,20 @@ class _AnyQuerySearchProvider:
 
     def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
         return self.results[:max_results]
+
+
+class _SecQueryFailingSearchProvider:
+    def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+        if "SEC 10-K" in query:
+            raise TimeoutError("search timeout")
+        return [
+            SearchResult(
+                title="Costco supplier information",
+                publisher="Costco",
+                url="https://www.costco.com/suppliers.html",
+                snippet="Costco supplier expectations and contact information.",
+            )
+        ][:max_results]
 
 
 def _dummy_agent_set(**kwargs: Any) -> SimpleNamespace:
@@ -140,6 +156,77 @@ def _costco_cash_flow_claim(
             "and membership fees."
         ),
     )
+
+
+def test_conservative_report_uses_charter_target_without_costco_wording() -> None:
+    charter = ResearchCharter(
+        target="TargetCo",
+        target_type="company",
+        research_lens="sales",
+        depth="brief",
+        deliverable="meeting_prep_brief",
+        key_questions=["What should we understand before the supplier meeting?"],
+    )
+    plan = ResearchPlan(
+        research_questions=["What should suppliers understand about TargetCo?"],
+        report_sections=["overview", "supplier_context"],
+        required_source_types=["primary_company"],
+        checkpoint_questions=["Which buyer function owns the category?"],
+    )
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="src_target_primary",
+                title="TargetCo supplier information",
+                publisher="TargetCo",
+                url="https://www.targetco.example/suppliers",
+                source_type="primary_company",
+                relevance_rationale="Primary supplier information.",
+                recommended_uses=["supplier context"],
+                bias_risk="medium",
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="src_target_primary",
+                authority_score=4,
+                relevance_score=4,
+                recency_score=3,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=4,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+    evidence_ledger = _validate_evidence(
+        [
+            EvidenceClaim(
+                id="claim_target_supplier",
+                claim="TargetCo publishes supplier information for vendors.",
+                claim_type="fact",
+                source_id="src_target_primary",
+                source_title="TargetCo supplier information",
+                source_url="https://www.targetco.example/suppliers",
+                source_type="primary_company",
+                confidence="medium",
+                report_section="supplier_context",
+            )
+        ],
+        source_map=source_map,
+    )
+
+    report = _create_conservative_report(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        source_fetch_log=None,
+    )
+
+    assert "TargetCo" in report.markdown
+    assert "Costco" not in report.markdown
 
 
 def test_deduplicate_claims_drops_near_duplicate_specialist_claim_before_renaming() -> None:
@@ -459,6 +546,7 @@ def test_full_qa_run_with_fetched_sec_content_and_duplicate_specialist_reaches_q
         "competitor",
         "risk",
         "synthesis",
+        "qa",
         "qa",
     ]
     assert result.metadata.status == "needs_review"
@@ -880,6 +968,117 @@ def test_validate_evidence_drops_claims_from_failed_source_fetches() -> None:
         and "fetch status failed" in warning
         for warning in ledger.validation_warnings
     )
+
+
+def test_validate_evidence_drops_url_only_claim_from_failed_source_fetch() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="src_failed",
+                title="Failed source",
+                publisher="Example",
+                url="https://example.com/failed",
+                source_type="primary_company",
+                bias_risk="medium",
+                relevance_rationale="Failed direct source.",
+                recommended_uses=["overview"],
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="src_failed",
+                authority_score=4,
+                relevance_score=4,
+                recency_score=4,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=4,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+
+    ledger = _validate_evidence(
+        [
+            EvidenceClaim(
+                id="claim_url_only_failed",
+                claim="The failed source says the company has a current priority.",
+                claim_type="fact",
+                confidence="medium",
+                report_section="overview",
+                source_url="https://example.com/failed",
+                source_type="primary_company",
+            )
+        ],
+        source_map=source_map,
+        source_fetch_log=SourceFetchLog(
+            results=[
+                SourceFetchResult(
+                    source_id="src_failed",
+                    url="https://example.com/failed",
+                    status="failed",
+                    error="HTTP 403",
+                )
+            ]
+        ),
+    )
+
+    assert ledger.claims == []
+    assert any(
+        "Dropped unsupported evidence claim ID claim_url_only_failed" in warning
+        and "https://example.com/failed fetch status failed" in warning
+        for warning in ledger.validation_warnings
+    )
+
+
+def test_fetched_sec_archive_clears_future_dated_source_map_warning() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="src_10k",
+                title="Costco Annual Report for the fiscal year ended August 31, 2025",
+                publisher="SEC.gov",
+                url="https://www.sec.gov/Archives/edgar/data/909832/000090983225000101/cost-20250831.htm",
+                source_type="corporate_filing",
+                bias_risk="low",
+                relevance_rationale="Latest annual filing.",
+                recommended_uses=["current business context"],
+                notes="Appears to be a future-dated filing; verify before use.",
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="src_10k",
+                authority_score=5,
+                relevance_score=4,
+                recency_score=4,
+                coverage_score=5,
+                bias_risk="low",
+                final_score=4.4,
+                include=True,
+            )
+        ],
+        gaps=["One surfaced filing appears future-dated (2025 10-K); should be verified before use."],
+    )
+
+    updated = _source_map_with_fetch_verification_notes(
+        source_map,
+        SourceFetchLog(
+            results=[
+                SourceFetchResult(
+                    source_id="src_10k",
+                    url="https://www.sec.gov/Archives/edgar/data/909832/000090983225000101/cost-20250831.htm",
+                    status="fetched",
+                    text_char_count=1000,
+                    chunk_count=1,
+                )
+            ]
+        ),
+    )
+
+    assert updated.sources[0].notes == "SEC filing availability verified from fetched text."
+    assert updated.gaps == []
 
 
 def test_continue_from_mock_checkpoint_uses_saved_feedback(tmp_path: Path) -> None:
@@ -1363,6 +1562,71 @@ def test_live_checkpoint_includes_mocked_search_results_in_source_agent_prompt(
     assert "source_discovery" in prompts_by_agent
     assert sources[0]["url"] == "https://www.costco.com/suppliers.html"
     assert source_map["scores"][0]["source_id"] in {"src_costco_primary", "src_costco_news"}
+
+
+def test_live_checkpoint_records_failed_search_queries_in_source_map_gaps(
+    tmp_path: Path,
+    mocker: Any,
+) -> None:
+    mocker.patch(
+        "agentic_research.tools.web_search._sec_filing_fallback_results",
+        return_value=[],
+    )
+    search_client = WebSearchClient(provider=_SecQueryFailingSearchProvider())
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What should suppliers understand before a meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category matters?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco supplier information",
+                        publisher="Costco",
+                        url="https://www.costco.com/suppliers.html",
+                        source_type="primary_company",
+                        relevance_rationale="Primary supplier source.",
+                        recommended_uses=["supplier context"],
+                        bias_risk="medium",
+                    )
+                ],
+                gaps=["No earnings transcript source was discovered."],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        search_client=search_client,
+    )
+
+    source_map = result.source_map
+    assert source_map is not None
+    assert "No earnings transcript source was discovered." in source_map.gaps
+    assert any(
+        "Search query failed: Costco SEC 10-K annual report site:sec.gov supplier meeting"
+        in gap
+        and "TimeoutError: search timeout" in gap
+        for gap in source_map.gaps
+    )
 
 
 def test_full_run_without_qa_writes_draft_only_from_mocked_synthesis_output(
@@ -2525,6 +2789,130 @@ def test_full_run_with_only_indirect_evidence_stops_before_synthesis(
     assert not (run_dir / "report.md").exists()
 
 
+def test_full_run_with_direct_current_earnings_evidence_reaches_synthesis(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What matters before the supplier meeting?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand about Costco?"],
+                report_sections=["overview", "supplier_context"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_costco_primary",
+                        title="Costco latest earnings release",
+                        publisher="Costco",
+                        url="https://investor.costco.com/latest-earnings",
+                        source_type="primary_company",
+                        publication_date="2025-12-10",
+                        relevance_rationale="Fetched primary current earnings source.",
+                        recommended_uses=["latest earnings context"],
+                        bias_risk="medium",
+                    )
+                ]
+            )
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_latest_earnings",
+                        claim=(
+                            "Costco's latest 2025 earnings release says net sales "
+                            "increased from the prior year."
+                        ),
+                        claim_type="fact",
+                        source_id="src_costco_primary",
+                        source_title="Costco latest earnings release",
+                        source_url="https://investor.costco.com/latest-earnings",
+                        source_type="primary_company",
+                        confidence="high",
+                        report_section="latest earnings context",
+                        quote_or_excerpt="net sales increased from the prior year",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary=f"{agent_key} analysis stays source-bound.",
+                source_ids=["src_costco_primary"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Brief",
+                markdown=(
+                    "# Costco Supplier Meeting Brief\n\n"
+                    "## Executive Summary\n"
+                    "Costco's latest 2025 earnings release says net sales increased "
+                    "from the prior year. [claim_latest_earnings]\n\n"
+                    "## Context for Meeting\n"
+                    "Use the earnings evidence as a directly supported current fact. "
+                    "[claim_latest_earnings]\n\n"
+                    "## What We Know\n"
+                    "- Net sales increased from the prior year. [claim_latest_earnings]\n\n"
+                    "## What We Do Not Know\n"
+                    "- Category-specific buyer priorities were not verified.\n\n"
+                    "## Supplier/Buyer Angle\n"
+                    "Any supplier implications should stay conditional.\n\n"
+                    "## Questions to Ask\n"
+                    "- Which supplier category should be prioritized?\n\n"
+                    "## Risks and Watchouts\n"
+                    "- Current evidence is one primary source.\n\n"
+                    "## Evidence Limitations\n"
+                    "Only one current primary source was fetched.\n\n"
+                    "## Source Appendix\n"
+                    "- Costco latest earnings release (src_costco_primary)\n"
+                ),
+                source_ids=["src_costco_primary"],
+                claim_ids=["claim_latest_earnings"],
+            )
+        raise AssertionError(f"Unexpected agent call: {agent_key}")
+
+    result = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=False,
+        full=True,
+        qa=False,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_agent_runner,
+        source_fetcher=lambda url, timeout_seconds: SourceHttpResponse(
+            url=url,
+            status_code=200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=(
+                "<html><body><main><p>Net sales increased from the prior year."
+                "</p></main></body></html>"
+            ),
+        ),
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    assert "synthesis" in calls
+    assert result.metadata.status == "draft_needs_qa"
+    assert result.evidence_ledger is not None
+    assert DIRECT_EVIDENCE_SUFFICIENCY_WARNING not in (
+        result.evidence_ledger.validation_warnings
+    )
+
+
 def test_full_qa_run_with_allowed_claim_ids_reaches_qa_normally(
     tmp_path: Path,
 ) -> None:
@@ -3325,7 +3713,6 @@ def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path
         "risk",
         "filings",
         "synthesis",
-        "qa",
         "qa",
     ]
     assert "draft_report" in qa_prompt
