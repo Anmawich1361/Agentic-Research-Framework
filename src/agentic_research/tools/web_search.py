@@ -117,7 +117,11 @@ class WebSearchClient:
         seen_urls: set[str] = set()
         results: list[SearchResult] = []
         for query in queries:
-            for result in self.search(query, max_results=max_results_per_query):
+            try:
+                query_results = self.search(query, max_results=max_results_per_query)
+            except Exception:
+                continue
+            for result in query_results:
                 if result.url in seen_urls:
                     continue
                 seen_urls.add(result.url)

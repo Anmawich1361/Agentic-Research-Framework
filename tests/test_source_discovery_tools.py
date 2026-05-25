@@ -10,6 +10,21 @@ from agentic_research.tools.web_search import (
 )
 
 
+class PartiallyFailingSearchProvider:
+    def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+        if "primary source" in query:
+            raise TimeoutError("search timed out")
+        return [
+            SearchResult(
+                title="Recent Costco supplier coverage",
+                publisher="Mock News",
+                url="https://example.com/costco-supplier-news",
+                snippet="Recent reporting on Costco suppliers.",
+                publication_date="2026-04-01",
+            )
+        ][:max_results]
+
+
 def _charter() -> ResearchCharter:
     return ResearchCharter(
         target="Costco",

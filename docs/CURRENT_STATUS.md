@@ -30,6 +30,44 @@ The next work should be quality refinement, not new features. Priority areas
 include stronger evidence, better source grounding, more conservative synthesis,
 and smaller/refactored orchestration modules.
 
+## 2026-05-25 Production-Readiness Update
+
+This pass narrowed the live full-QA path instead of weakening gates:
+
+- Evidence claims tied to failed or skipped source fetches are dropped before
+  synthesis.
+- Retrieval-gap pseudo-claims, such as fetched pages returning no usable filing
+  data, are no longer treated as substantive evidence.
+- Company reports now stop before synthesis when no direct company, filing,
+  investor, or earnings evidence claims remain after filtering.
+- If QA blocks an overconfident draft, the pipeline tries a conservative
+  source-grounded fallback report that cites only claims it actually uses and
+  excludes current/recent/strategy claims and secondary industry-primer claims.
+- Per-query web-search failures no longer abort the whole source-discovery
+  stage.
+
+Validation run before this handoff:
+
+- `make doctor`
+- `make check`
+- `make smoke-mock`
+- live Costco full-QA command:
+  `./scripts/load_env_and_run.sh .venv/bin/arf run "Research Costco before a supplier meeting" --full --qa --mode brief --lens sales`
+
+Latest inspected live run: `run_20260525T152401Z_7f40415a`.
+
+That run correctly blocked at `evidence_needs_review`, before synthesis and QA,
+because no source content was fetched. `source_fetch_log.json` shows six direct
+Costco investor/filing/earnings sources failed with HTTP 403, no readable text,
+or an SSL timeout. No `draft_report.md`, `qa_review.json`, or `report.md` was
+written, which preserves the publication gate for a legitimate external source
+access gap.
+
+Remaining risk: live source coverage still depends on external search and
+fetchability. A future improvement should add a more reliable primary-source
+retrieval path for SEC/company filings without turning this into a complex SEC
+parser.
+
 ## Publication Gate
 
 Final report publication remains QA-gated.
