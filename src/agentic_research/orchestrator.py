@@ -690,6 +690,19 @@ def _sanitize_evidence_claims_for_synthesis(
                 f"fetch status {fetch_result.status} produced no usable source text."
             )
             continue
+        if fetch_result is not None and fetch_result.status == "fallback":
+            source_label = claim.source_id or claim.source_url or fetch_result.source_id
+            fallback_reason = (
+                "weak fallback metadata/search-snippet context"
+                if _failed_source_metadata_claim(claim)
+                else "weak fallback context"
+            )
+            warnings.append(
+                "Dropped unsupported evidence claim ID "
+                f"{claim.id} before synthesis: source {source_label} only had "
+                f"{fallback_reason}, not fetched source text."
+            )
+            continue
 
         quality_category = classify_evidence_claim(claim)
         if quality_category in {
@@ -715,17 +728,6 @@ def _sanitize_evidence_claims_for_synthesis(
                 "Downgraded evidence claim ID "
                 f"{claim.id} from high to medium confidence before synthesis: "
                 f"source {score.source_id} authority is {score.authority_score}."
-            )
-            continue
-
-        if fetch_result is not None and fetch_result.status == "fallback" and (
-            claim.confidence == "high"
-        ):
-            sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
-            warnings.append(
-                "Downgraded evidence claim ID "
-                f"{claim.id} from high to medium confidence before synthesis: "
-                f"source {claim.source_id} only had weak fallback context."
             )
             continue
 
@@ -986,13 +988,13 @@ def _synthesis_quality_rules() -> list[str]:
     return [
         "Use source_content-derived evidence claims as the basis for report claims.",
         "Do not promote CNBC/news summaries, transcript summaries, or source-finding "
-        "aids into Costco-specific strategy unless a concrete evidence claim directly "
-        "supports the strategy statement.",
+        "aids into target company strategy unless a concrete evidence claim directly "
+        "supports that strategy statement.",
         "Recent developments must cite direct evidence claims from fetched source "
         "content. If latest earnings release or transcript support is missing, say "
         "that it was not verified from available sources.",
         "Supplier-meeting recommendations require direct claim IDs or an explicit "
-        "caveat that the point is a hypothesis or question to confirm with Costco.",
+        "caveat that the point is a hypothesis or question to confirm with the target company.",
         "Separate directly supported facts, cautious inferences, and unknowns/open "
         "questions in the draft.",
         "Quartr pages, source-finding aids, search-result pages, and source-map "
@@ -1031,13 +1033,13 @@ def _synthesis_source_evidence_context(
     if candidate_direct_source_ids and not fetched_direct_source_ids:
         warnings.append(
             "Primary/company/investor source candidates were discovered but no readable "
-            "direct source content was fetched. Treat Costco recent developments and "
+            "direct source content was fetched. Treat target company recent developments and "
             "strategy as unverified unless directly supported by fetched evidence."
         )
     if fetched_source_ids and not fetched_direct_source_ids:
         warnings.append(
             "Fetched source content is secondary or indirect only. State this source "
-            "gap and avoid presenting Costco current strategy as verified."
+            "gap and avoid presenting target company current strategy as verified."
         )
     if not fetched_source_ids:
         warnings.append(

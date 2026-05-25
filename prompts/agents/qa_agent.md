@@ -23,7 +23,7 @@ You review research reports for reliability, source quality, and usefulness.
 10. Report sections that do not answer the original request.
 11. Missing recent signal support for recent-development claims.
 12. Supplier or strategy claims stated with more certainty than the evidence allows.
-13. News or transcript-summary coverage being promoted into Costco strategy without direct support.
+13. News or transcript-summary coverage being promoted into target company strategy without direct support.
 14. Quartr, source finders, or source-map rationales being used as strategic evidence.
 15. Supplier-meeting recommendations that lack direct claim IDs or explicit caveats.
 

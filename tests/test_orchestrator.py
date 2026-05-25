@@ -29,6 +29,7 @@ from agentic_research.orchestrator import (
     _merge_specialist_claims,
     _source_content_payload,
     _source_map_with_fetch_verification_notes,
+    _synthesis_quality_rules,
     _synthesis_source_evidence_context,
     _validate_evidence,
     continue_research,
@@ -410,6 +411,76 @@ def test_claim_from_failed_nonfallback_source_is_dropped_before_synthesis() -> N
     )
 
 
+def test_search_snippet_fallback_cannot_support_material_report_fact() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="s1",
+                title="RetailCo supplier standards",
+                publisher="RetailCo",
+                url="https://www.retailco.example/supplier-standards.html",
+                source_type="primary_company",
+                relevance_rationale="Supplier standards page surfaced by search.",
+                recommended_uses=["supplier context"],
+                bias_risk="medium",
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="s1",
+                authority_score=4,
+                relevance_score=4,
+                recency_score=3,
+                coverage_score=3,
+                bias_risk="medium",
+                final_score=4,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+    source_fetch_log = SourceFetchLog(
+        results=[
+            SourceFetchResult(
+                source_id="s1",
+                url="https://www.retailco.example/supplier-standards.html",
+                status="fallback",
+                content_type="search_snippet_only",
+                title="RetailCo supplier standards",
+                excerpt="RetailCo supplier standards and quality program.",
+                failure_reason="bot_access_block",
+            )
+        ]
+    )
+
+    ledger = _validate_evidence(
+        [
+            EvidenceClaim(
+                id="snippet_fact",
+                claim=(
+                    "RetailCo's supplier standards page indicates vendors "
+                    "should prioritize quality-program compliance."
+                ),
+                claim_type="fact",
+                source_id="s1",
+                source_title="RetailCo supplier standards",
+                source_url="https://www.retailco.example/supplier-standards.html",
+                source_type="primary_company",
+                confidence="high",
+                report_section="supplier_context",
+            )
+        ],
+        source_map=source_map,
+        source_fetch_log=source_fetch_log,
+    )
+
+    assert ledger.claims == []
+    assert any(
+        "weak fallback metadata" in warning and "snippet_fact" in warning
+        for warning in ledger.validation_warnings
+    )
+
+
 def test_full_qa_run_with_fetched_sec_content_and_duplicate_specialist_reaches_qa(
     tmp_path: Path,
     monkeypatch: Any,
@@ -765,7 +836,16 @@ def test_synthesis_source_evidence_context_warns_when_direct_sources_do_not_fetc
     assert context["candidate_direct_source_ids"] == ["s_primary"]
     assert context["failed_or_skipped_source_ids"] == ["s_primary"]
     assert context["secondary_or_indirect_only"] is True
+    assert all("Costco" not in warning for warning in context["warnings"])
+    assert any("target company" in warning for warning in context["warnings"])
     assert any("direct source content" in warning for warning in context["warnings"])
+
+
+def test_synthesis_quality_rules_use_generic_target_company_wording() -> None:
+    rules = _synthesis_quality_rules()
+
+    assert all("Costco" not in rule for rule in rules)
+    assert any("target company" in rule for rule in rules)
 
 
 def test_validate_evidence_drops_claims_without_usable_source_before_synthesis() -> None:
