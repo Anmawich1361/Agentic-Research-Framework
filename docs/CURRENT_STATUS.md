@@ -119,3 +119,42 @@ The framework writes `report.md` only when:
 Blocked runs retain review artifacts such as `draft_report.md`,
 `qa_review.json`, `report_revision.md`, `evidence_review.md`, or
 `artifact_review.md` as applicable.
+
+## 2026-05-25 Orchestrator Helper Extraction
+
+This pass reduced `src/agentic_research/orchestrator.py` from about 2,800 lines
+to about 1,600 lines by moving cohesive helper logic into focused modules:
+
+- `src/agentic_research/evidence_pipeline.py` now owns evidence claim URL
+  repair, failed/skipped/fallback source filtering, evidence sanitization,
+  deduplication, specialist claim merging, and direct-company evidence
+  sufficiency checks.
+- `src/agentic_research/source_context.py` now owns fetched source-map URL
+  updates, SEC fetch-verification notes, source-content payload shaping,
+  weak search-snippet fallback contexts, source-fetch-log fallback transforms,
+  and synthesis source-evidence context.
+- `src/agentic_research/conservative_report.py` now owns conservative
+  meeting-prep fallback report creation, conservative claim selection,
+  source appendix/evidence limitations, supplier-meeting fallback eligibility,
+  and missing-section repair helpers.
+
+Validation run for this refactor:
+
+- `make doctor`
+- `make check`
+- `make smoke-mock`
+- `git diff --check`
+- live Costco full-QA command:
+  `./scripts/load_env_and_run.sh .venv/bin/arf run "Research Costco before a supplier meeting" --full --qa --mode brief --lens sales`
+
+Latest inspected live run: `run_20260525T184647Z_504e0610`.
+
+That run completed with `metadata.status = report_ready`, wrote `report.md`,
+and `qa_review.json` had zero high-severity issues. QA still recorded three
+medium issues and one low issue around recency framing, generic supplier-meeting
+recommendations, and separating verified findings from search gaps.
+
+Remaining risk: orchestration is smaller but still coordinates long live and
+continue branches with duplicated synthesis/QA flow. Future refactors should
+continue extracting workflow-stage builders only after preserving the current
+artifact names, mock mode, evidence gates, and final-report publication rules.
