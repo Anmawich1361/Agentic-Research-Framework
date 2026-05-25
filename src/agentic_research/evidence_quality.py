@@ -62,9 +62,15 @@ _STOPWORDS = {
 }
 _FILLER_TOKENS = _REPORTING_FILLERS | _STOPWORDS
 _UNCLEAR_MARKERS = (
+    "as fetched",
+    "could not verify",
+    "no filings data",
     "unclear",
     "unknown",
+    "not available",
     "not enough information",
+    "not retrieved",
+    "not verified",
     "not specified",
     "n/a",
 )

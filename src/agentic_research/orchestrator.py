@@ -24,8 +24,10 @@ from agentic_research.evidence_ledger import (
     evidence_claim_content_key,
     raise_if_report_has_unsupported_claims,
 )
-from agentic_research.evidence_quality import is_near_duplicate_claim
+from agentic_research.evidence_quality import DEFAULT_NEAR_DUPLICATE_THRESHOLD
+from agentic_research.evidence_quality import claim_similarity
 from agentic_research.evidence_quality import classify_evidence_claim
+from agentic_research.evidence_quality import is_near_duplicate_claim
 from agentic_research.models import (
     Confidence,
     EvidenceClaim,
@@ -43,6 +45,7 @@ from agentic_research.models import (
     SourceDiscoveryResult,
     SourceFallbackContext,
     SourceFetchLog,
+    SourceFetchResult,
     SourceMap,
     SourceScore,
     SpecialistAnalysis,
@@ -83,6 +86,7 @@ from agentic_research.specialists import (
     select_specialists,
 )
 from agentic_research.tools.web_search import (
+    SearchFailure,
     SearchResult,
     WebSearchClient,
     build_source_search_queries,
@@ -185,6 +189,14 @@ def _unique_strings(items: list[str]) -> list[str]:
             seen.add(normalized)
             unique_items.append(normalized)
     return unique_items
+
+
+def _search_failure_gaps(search_failures: list[SearchFailure]) -> list[str]:
+    return [
+        f"Search query failed: {failure.query} "
+        f"({failure.error_type}: {failure.error})"
+        for failure in search_failures
+    ]
 
 
 def merge_user_feedback(existing: UserFeedback, updates: UserFeedback) -> UserFeedback:
@@ -336,6 +348,64 @@ def _source_map_with_fetched_urls(
     return source_map.model_copy(update={"sources": sources})
 
 
+def _has_future_dated_marker(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.lower()
+    return "future-dated" in normalized or "future dated" in normalized
+
+
+def _is_fetched_sec_archive_result(result: SourceFetchResult) -> bool:
+    if result.status != "fetched":
+        return False
+    return any(
+        "sec.gov/archives/" in (url or "").lower()
+        for url in (result.url, result.fetched_url)
+    )
+
+
+def _source_map_with_fetch_verification_notes(
+    source_map: SourceMap,
+    source_fetch_log: SourceFetchLog | None,
+) -> SourceMap:
+    if source_fetch_log is None:
+        return source_map
+
+    verified_sec_source_ids = {
+        result.source_id
+        for result in source_fetch_log.results
+        if _is_fetched_sec_archive_result(result)
+    }
+    if not verified_sec_source_ids:
+        return source_map
+
+    changed = False
+    sources: list[SourceCandidate] = []
+    for source in source_map.sources:
+        if source.id in verified_sec_source_ids and _has_future_dated_marker(source.notes):
+            sources.append(
+                source.model_copy(
+                    update={"notes": "SEC filing availability verified from fetched text."}
+                )
+            )
+            changed = True
+            continue
+        sources.append(source)
+
+    gaps = list(source_map.gaps)
+    filtered_gaps = [
+        gap
+        for gap in gaps
+        if not (_has_future_dated_marker(gap) and "filing" in gap.lower())
+    ]
+    if len(filtered_gaps) != len(gaps):
+        changed = True
+
+    if not changed:
+        return source_map
+    return source_map.model_copy(update={"sources": sources, "gaps": filtered_gaps})
+
+
 def _sec_archive_document_identity(url: str | None) -> tuple[str, str] | None:
     if not url:
         return None
@@ -466,6 +536,19 @@ def _next_specialist_claim_id(
     return candidate
 
 
+def _is_specialist_merge_near_duplicate(
+    existing_claim: EvidenceClaim,
+    claim: EvidenceClaim,
+) -> bool:
+    if is_near_duplicate_claim(existing_claim, claim):
+        return True
+    return (
+        existing_claim.id == claim.id
+        and claim_similarity(existing_claim.claim, claim.claim)
+        >= DEFAULT_NEAR_DUPLICATE_THRESHOLD
+    )
+
+
 def _deduplicate_claims(
     base_claims: list[EvidenceClaim],
     specialist_analyses: list[SpecialistAnalysis] | None = None,
@@ -491,7 +574,7 @@ def _deduplicate_claims(
                 (
                     existing_claim
                     for existing_claim in deduped_claims
-                    if is_near_duplicate_claim(existing_claim, claim)
+                    if _is_specialist_merge_near_duplicate(existing_claim, claim)
                 ),
                 None,
             )
@@ -519,7 +602,7 @@ def _deduplicate_claims(
                 (
                     existing_claim
                     for existing_claim in deduped_claims
-                    if is_near_duplicate_claim(existing_claim, claim)
+                    if _is_specialist_merge_near_duplicate(existing_claim, claim)
                 ),
                 None,
             )
@@ -567,6 +650,12 @@ def _sanitize_evidence_claims_for_synthesis(
         result.source_id: result
         for result in (source_fetch_log.results if source_fetch_log is not None else [])
     }
+    fetch_result_by_url: dict[str, SourceFetchResult] = {}
+    for result in source_fetch_log.results if source_fetch_log is not None else []:
+        for url in (result.url, result.fetched_url):
+            normalized_url = _normalized_url(url) if url else ""
+            if normalized_url:
+                fetch_result_by_url[normalized_url] = result
     sanitized_claims: list[EvidenceClaim] = []
     warnings: list[str] = []
 
@@ -590,30 +679,32 @@ def _sanitize_evidence_claims_for_synthesis(
                 )
                 continue
 
-        quality_category = classify_evidence_claim(claim)
         fetch_result = fetch_result_lookup.get(claim.source_id) if claim.source_id else None
+        if fetch_result is None and claim.source_url:
+            fetch_result = fetch_result_by_url.get(_normalized_url(claim.source_url))
         if fetch_result is not None and fetch_result.status in {"failed", "skipped"}:
-            if quality_category in {
-                "source_metadata_only",
-                "source_finding_aid",
-                "unsupported_or_unclear",
-            } or _failed_source_metadata_claim(claim):
-                warnings.append(
-                    "Dropped unsupported evidence claim ID "
-                    f"{claim.id} before synthesis: source {claim.source_id} fetch "
-                    f"status {fetch_result.status} produced no usable source text."
-                )
-                continue
-            if claim.confidence == "high":
-                sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
-                warnings.append(
-                    "Downgraded evidence claim ID "
-                    f"{claim.id} from high to medium confidence before synthesis: "
-                    f"source {claim.source_id} fetch status {fetch_result.status} "
-                    "produced no usable source text."
-                )
-                continue
+            source_label = claim.source_id or claim.source_url or fetch_result.source_id
+            warnings.append(
+                "Dropped unsupported evidence claim ID "
+                f"{claim.id} before synthesis: source {source_label} "
+                f"fetch status {fetch_result.status} produced no usable source text."
+            )
+            continue
+        if fetch_result is not None and fetch_result.status == "fallback":
+            source_label = claim.source_id or claim.source_url or fetch_result.source_id
+            fallback_reason = (
+                "weak fallback metadata/search-snippet context"
+                if _failed_source_metadata_claim(claim)
+                else "weak fallback context"
+            )
+            warnings.append(
+                "Dropped unsupported evidence claim ID "
+                f"{claim.id} before synthesis: source {source_label} only had "
+                f"{fallback_reason}, not fetched source text."
+            )
+            continue
 
+        quality_category = classify_evidence_claim(claim)
         if quality_category in {
             "source_metadata_only",
             "source_finding_aid",
@@ -637,17 +728,6 @@ def _sanitize_evidence_claims_for_synthesis(
                 "Downgraded evidence claim ID "
                 f"{claim.id} from high to medium confidence before synthesis: "
                 f"source {score.source_id} authority is {score.authority_score}."
-            )
-            continue
-
-        if fetch_result is not None and fetch_result.status == "fallback" and (
-            claim.confidence == "high"
-        ):
-            sanitized_claims.append(claim.model_copy(update={"confidence": "medium"}))
-            warnings.append(
-                "Downgraded evidence claim ID "
-                f"{claim.id} from high to medium confidence before synthesis: "
-                f"source {claim.source_id} only had weak fallback context."
             )
             continue
 
@@ -908,13 +988,13 @@ def _synthesis_quality_rules() -> list[str]:
     return [
         "Use source_content-derived evidence claims as the basis for report claims.",
         "Do not promote CNBC/news summaries, transcript summaries, or source-finding "
-        "aids into Costco-specific strategy unless a concrete evidence claim directly "
-        "supports the strategy statement.",
+        "aids into target company strategy unless a concrete evidence claim directly "
+        "supports that strategy statement.",
         "Recent developments must cite direct evidence claims from fetched source "
         "content. If latest earnings release or transcript support is missing, say "
         "that it was not verified from available sources.",
         "Supplier-meeting recommendations require direct claim IDs or an explicit "
-        "caveat that the point is a hypothesis or question to confirm with Costco.",
+        "caveat that the point is a hypothesis or question to confirm with the target company.",
         "Separate directly supported facts, cautious inferences, and unknowns/open "
         "questions in the draft.",
         "Quartr pages, source-finding aids, search-result pages, and source-map "
@@ -953,13 +1033,13 @@ def _synthesis_source_evidence_context(
     if candidate_direct_source_ids and not fetched_direct_source_ids:
         warnings.append(
             "Primary/company/investor source candidates were discovered but no readable "
-            "direct source content was fetched. Treat Costco recent developments and "
+            "direct source content was fetched. Treat target company recent developments and "
             "strategy as unverified unless directly supported by fetched evidence."
         )
     if fetched_source_ids and not fetched_direct_source_ids:
         warnings.append(
             "Fetched source content is secondary or indirect only. State this source "
-            "gap and avoid presenting Costco current strategy as verified."
+            "gap and avoid presenting target company current strategy as verified."
         )
     if not fetched_source_ids:
         warnings.append(
@@ -1290,6 +1370,396 @@ def _repair_missing_report_sections(
     return report.model_copy(update={"markdown": markdown})
 
 
+def _claim_line(claim: EvidenceClaim) -> str:
+    return f"{claim.claim} [{claim.id}]"
+
+
+def _evidence_source_ids(evidence_ledger: EvidenceLedgerModel) -> list[str]:
+    seen: set[str] = set()
+    source_ids: list[str] = []
+    for claim in evidence_ledger.claims:
+        source_id = (claim.source_id or "").strip()
+        if source_id and source_id not in seen:
+            seen.add(source_id)
+            source_ids.append(source_id)
+    return source_ids
+
+
+_CONSERVATIVE_REPORT_EXCLUDE_MARKERS = (
+    "current",
+    "recent",
+    "latest",
+    "2025",
+    "earnings",
+    "transcript",
+    "strategic",
+    "strategy",
+    "priorit",
+    "momentum",
+    "technology investment",
+    "warehouse opening",
+    "e-commerce",
+    "tariff",
+    "renewal rate",
+)
+
+_CONSERVATIVE_REPORT_SOURCE_TYPES = {
+    "corporate_filing",
+    "earnings_release",
+    "investor_material",
+    "primary_company",
+}
+
+_DIRECT_COMPANY_EVIDENCE_SOURCE_TYPES = {
+    *_CONSERVATIVE_REPORT_SOURCE_TYPES,
+    "earnings_transcript",
+}
+
+DIRECT_EVIDENCE_SUFFICIENCY_WARNING = (
+    "No direct company, filing, investor, or earnings evidence claims remained "
+    "after filtering; fetched source content is too indirect for a source-grounded "
+    "company report."
+)
+
+
+def _is_conservative_report_claim(
+    claim: EvidenceClaim,
+    *,
+    source_lookup: dict[str, SourceCandidate],
+) -> bool:
+    source = source_lookup.get(claim.source_id or "")
+    source_type = (claim.source_type or (source.source_type if source else "")).lower()
+    if source_type not in _CONSERVATIVE_REPORT_SOURCE_TYPES:
+        return False
+    if claim.claim_type != "fact":
+        return False
+    claim_text = f"{claim.claim} {claim.report_section}".lower()
+    return not any(marker in claim_text for marker in _CONSERVATIVE_REPORT_EXCLUDE_MARKERS)
+
+
+def _is_direct_company_evidence_claim(
+    claim: EvidenceClaim,
+    *,
+    source_lookup: dict[str, SourceCandidate],
+) -> bool:
+    source = source_lookup.get(claim.source_id or "")
+    source_type = (claim.source_type or (source.source_type if source else "")).lower()
+    return claim.claim_type == "fact" and source_type in _DIRECT_COMPANY_EVIDENCE_SOURCE_TYPES
+
+
+def _conservative_report_claims(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    source_map: SourceMap,
+) -> list[EvidenceClaim]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    return [
+        claim
+        for claim in evidence_ledger.claims
+        if _is_conservative_report_claim(claim, source_lookup=source_lookup)
+    ]
+
+
+def _direct_company_evidence_claims(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    source_map: SourceMap,
+) -> list[EvidenceClaim]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    return [
+        claim
+        for claim in evidence_ledger.claims
+        if _is_direct_company_evidence_claim(claim, source_lookup=source_lookup)
+    ]
+
+
+def _enforce_direct_company_evidence(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    charter: ResearchCharter,
+    source_map: SourceMap,
+) -> EvidenceLedgerModel:
+    if charter.target_type != "company" or not evidence_ledger.claims:
+        return evidence_ledger
+    if _direct_company_evidence_claims(evidence_ledger, source_map=source_map):
+        return evidence_ledger
+    if DIRECT_EVIDENCE_SUFFICIENCY_WARNING in evidence_ledger.validation_warnings:
+        return evidence_ledger
+    return evidence_ledger.model_copy(
+        update={
+            "validation_warnings": [
+                *evidence_ledger.validation_warnings,
+                DIRECT_EVIDENCE_SUFFICIENCY_WARNING,
+            ]
+        }
+    )
+
+
+def _source_ids_for_claims(claims: list[EvidenceClaim]) -> list[str]:
+    seen: set[str] = set()
+    source_ids: list[str] = []
+    for claim in claims:
+        source_id = (claim.source_id or "").strip()
+        if source_id and source_id not in seen:
+            seen.add(source_id)
+            source_ids.append(source_id)
+    return source_ids
+
+
+def _supplier_claims(claims: list[EvidenceClaim]) -> list[EvidenceClaim]:
+    supplier_markers = ("supplier", "vendor")
+    return [
+        claim
+        for claim in claims
+        if any(
+            marker in f"{claim.claim} {claim.report_section} {claim.source_type or ''}".lower()
+            for marker in supplier_markers
+        )
+    ]
+
+
+def _claim_reference_text(claims: list[EvidenceClaim]) -> str:
+    return " ".join(f"[{claim.id}]" for claim in claims).strip()
+
+
+def _conservative_source_appendix(
+    source_map: SourceMap,
+    *,
+    source_ids: list[str],
+) -> str:
+    source_lookup = {source.id: source for source in source_map.sources}
+    rows: list[str] = []
+    for source_id in source_ids:
+        source = source_lookup.get(source_id)
+        if source is None:
+            continue
+        rows.append(f"- {source.id} - {source.title} - {source.url}")
+    return "\n".join(rows) or "- No cited evidence sources were available."
+
+
+def _conservative_evidence_limitations(
+    *,
+    evidence_ledger: EvidenceLedgerModel,
+    cited_claims: list[EvidenceClaim],
+    source_fetch_log: SourceFetchLog | None,
+) -> list[str]:
+    source_count = len(_source_ids_for_claims(cited_claims))
+    lines = [
+        (
+            f"This report uses {len(cited_claims)} evidence claims "
+            f"from {source_count} cited source IDs."
+        )
+    ]
+    if source_fetch_log is not None:
+        failed_or_skipped_count = sum(
+            1 for result in source_fetch_log.results if result.status in {"failed", "skipped"}
+        )
+        if failed_or_skipped_count:
+            lines.append(
+                "Some discovered investor, earnings, filing, or news sources were not "
+                "verified from fetched source content."
+            )
+    lines.append(
+        "Treat uncited supplier priorities, category fit, buyer identity, and timing as "
+        "questions to confirm."
+    )
+    return lines
+
+
+def _create_conservative_report(
+    *,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+    source_fetch_log: SourceFetchLog | None,
+) -> Report:
+    target = charter.target.strip() or "the target company"
+    template_name = select_report_template_name(charter)
+    required_sections = required_sections_for_report(
+        template_name=template_name,
+        evidence_ledger=evidence_ledger,
+        source_map=source_map,
+    )
+    conservative_claims = _conservative_report_claims(
+        evidence_ledger,
+        source_map=source_map,
+    )
+    direct_claims = conservative_claims[:6]
+    first_claims = direct_claims[:3]
+    supplier_claims = _supplier_claims(conservative_claims)[:3]
+    angle_claims = supplier_claims or first_claims
+    cited_claims: list[EvidenceClaim] = []
+    seen_claim_ids: set[str] = set()
+    for claim in [*first_claims, *direct_claims, *angle_claims]:
+        if claim.id in seen_claim_ids:
+            continue
+        cited_claims.append(claim)
+        seen_claim_ids.add(claim.id)
+    source_ids = _source_ids_for_claims(cited_claims) or _evidence_source_ids(evidence_ledger)
+    claim_ids = [claim.id for claim in cited_claims]
+    open_questions = _unique_nonempty(
+        [
+            *plan.checkpoint_questions,
+            *source_map.gaps,
+            *plan.data_gaps,
+        ]
+    )
+    evidence_limitations = _conservative_evidence_limitations(
+        evidence_ledger=evidence_ledger,
+        cited_claims=cited_claims,
+        source_fetch_log=source_fetch_log,
+    )
+    section_lines: dict[str, list[str]] = {
+        "Executive Summary": [
+            (
+                "Available fetched evidence supports only a narrow supplier-meeting "
+                f"brief based on directly cited public {target} evidence."
+            ),
+            (
+                "Do not treat this as verification of latest results, management "
+                "commentary, current momentum, or category-specific buying criteria."
+            ),
+            *[_claim_line(claim) for claim in first_claims],
+        ],
+        "Context for Meeting": [
+            (
+                "Use this as a narrow source-grounded prep note, not as a full account "
+                f"of {target} category or buying priorities."
+            ),
+            (
+                "Latest earnings, transcript, or results-release support was not "
+                "verified from fetched source content."
+            ),
+        ],
+        "What We Know": [_claim_line(claim) for claim in direct_claims]
+        or ["No directly supported facts were available."],
+        "What We Do Not Know": open_questions
+        or ["The available evidence does not identify category-specific buyer priorities."],
+        "Supplier/Buyer Angle": [
+            (
+                "Hypothesis to confirm: prepare the meeting around the public facts "
+                "that are directly cited here, not around uncited buying-priority "
+                f"claims. {_claim_reference_text(angle_claims)}"
+            ).strip(),
+            (
+                "Hypothesis to confirm: supplier recommendations should stay conditional "
+                f"until the buyer at {target} confirms category, geography, timing, and decision "
+                "criteria."
+            ),
+        ],
+        "Questions to Ask": plan.checkpoint_questions
+        or ["Which category, buyer function, geography, and timing should this brief cover?"],
+        "Risks and Watchouts": [
+            "Public evidence may not reflect the relevant category, buyer, or geography.",
+            f"Unsupported recommendations should remain questions until {target} confirms them.",
+        ],
+        "Evidence Limitations": evidence_limitations,
+        "Source Appendix": [],
+    }
+
+    title = f"# Meeting Prep Brief: {charter.target}"
+    sections: list[str] = [title]
+    for section in required_sections:
+        if section == "Source Appendix":
+            sections.append(
+                f"## Source Appendix\n{_conservative_source_appendix(source_map, source_ids=source_ids)}"
+            )
+            continue
+        lines = section_lines.get(
+            section,
+            _section_fill_lines(
+                section,
+                plan=plan,
+                source_map=source_map,
+                evidence_ledger=evidence_ledger,
+            ),
+        )
+        sections.append(f"## {section}\n{_format_markdown_bullets(lines)}")
+    if "Evidence Limitations" not in required_sections:
+        sections.append(
+            "## Evidence Limitations\n"
+            f"{_format_markdown_bullets(evidence_limitations)}"
+        )
+
+    return Report(
+        title=f"{charter.target} Meeting Prep Brief",
+        markdown="\n\n".join(section.rstrip() for section in sections) + "\n",
+        source_ids=source_ids,
+        claim_ids=claim_ids,
+        status="draft",
+    )
+
+
+def _can_apply_supplier_meeting_fallback(charter: ResearchCharter) -> bool:
+    deliverable = charter.deliverable.lower()
+    return select_report_template_name(charter) == "meeting_prep.md" and "meeting" in deliverable
+
+
+def _run_qa_with_conservative_revision(
+    *,
+    agents: Any,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+    report: Report,
+    agent_runner: AgentRunner | None,
+    source_fetch_log: SourceFetchLog | None,
+    run_logger: RunLogger | None = None,
+) -> tuple[Report, QAReview]:
+    qa_review = _run_qa_review(
+        agents=agents,
+        charter=charter,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        report=report,
+        agent_runner=agent_runner,
+        run_logger=run_logger,
+    )
+    if not has_high_severity_issues(qa_review):
+        return report, qa_review
+
+    template_name = select_report_template_name(charter)
+    if not _can_apply_supplier_meeting_fallback(charter):
+        return report, qa_review
+
+    conservative_report = _create_conservative_report(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        source_fetch_log=source_fetch_log,
+    )
+    try:
+        validate_report_traceability(
+            conservative_report,
+            evidence_ledger=evidence_ledger,
+            source_map=source_map,
+        )
+        validate_report_sections(
+            conservative_report,
+            template_name=template_name,
+            evidence_ledger=evidence_ledger,
+            source_map=source_map,
+        )
+    except ReportSectionValidationError:
+        return report, qa_review
+
+    conservative_qa_review = _run_qa_review(
+        agents=agents,
+        charter=charter,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        report=conservative_report,
+        agent_runner=agent_runner,
+        run_logger=run_logger,
+    )
+    if has_high_severity_issues(conservative_qa_review):
+        return report, qa_review
+    return conservative_report, conservative_qa_review
+
+
 def _should_write_final_report(
     *,
     report: Report | None,
@@ -1508,6 +1978,7 @@ def _continue_research_impl(
         fetched_count=len(source_content),
     )
     source_map = _source_map_with_fetched_urls(source_map, source_content)
+    source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
     sources = list(source_map.sources)
     approved_sources = _approved_sources(source_map)
     weak_fallback_contexts: list[SourceFallbackContext] = []
@@ -1569,6 +2040,11 @@ def _continue_research_impl(
         source_map=source_map,
         source_fetch_log=source_fetch_log,
     )
+    evidence_ledger = _enforce_direct_company_evidence(
+        evidence_ledger,
+        charter=charter,
+        source_map=source_map,
+    )
     specialist_analyses: list[SpecialistAnalysis] = []
     if not _has_blocking_evidence_warnings(evidence_ledger):
         run_logger.stage_start("specialists")
@@ -1589,6 +2065,11 @@ def _continue_research_impl(
         specialist_analyses,
         source_map=source_map,
         source_fetch_log=source_fetch_log,
+    )
+    evidence_ledger = _enforce_direct_company_evidence(
+        evidence_ledger,
+        charter=charter,
+        source_map=source_map,
     )
 
     report = None
@@ -1695,13 +2176,15 @@ def _continue_research_impl(
         else:
             if qa:
                 run_logger.stage_start("qa")
-                qa_review = _run_qa_review(
+                report, qa_review = _run_qa_with_conservative_revision(
                     agents=agents,
                     charter=charter,
+                    plan=plan,
                     source_map=source_map,
                     evidence_ledger=evidence_ledger,
                     report=report,
                     agent_runner=agent_runner,
+                    source_fetch_log=source_fetch_log,
                     run_logger=run_logger,
                 )
                 run_logger.stage_end("qa")
@@ -1968,10 +2451,12 @@ def _run_research_impl(
         query_count=len(source_search_queries),
     )
     raw_search_results = search_client.search_many(source_search_queries)
+    search_failures = list(search_client.last_failures)
     run_logger.tool_call(
         "web_search",
         status="end",
         result_count=len(raw_search_results),
+        failure_count=len(search_failures),
     )
     source_discovery_payload = {
         "charter": charter.model_dump(mode="json"),
@@ -2005,6 +2490,9 @@ def _run_research_impl(
         required_source_types=plan.required_source_types,
         mock=False,
     )
+    search_failure_gaps = _search_failure_gaps(search_failures)
+    if search_failure_gaps:
+        source_map.gaps.extend(search_failure_gaps)
     if source_discovery.gaps:
         source_map.gaps.extend(source_discovery.gaps)
 
@@ -2041,6 +2529,9 @@ def _run_research_impl(
             source_fetch_log,
             weak_fallback_contexts,
         )
+        source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
+        sources = list(source_map.sources)
+        approved_sources = _approved_sources(source_map)
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
@@ -2095,6 +2586,11 @@ def _run_research_impl(
             source_map=source_map,
             source_fetch_log=source_fetch_log,
         )
+        evidence_ledger = _enforce_direct_company_evidence(
+            evidence_ledger,
+            charter=charter,
+            source_map=source_map,
+        )
         status = (
             "evidence_needs_review"
             if _has_blocking_evidence_warnings(evidence_ledger)
@@ -2118,6 +2614,11 @@ def _run_research_impl(
             specialist_analyses,
             source_map=source_map,
             source_fetch_log=source_fetch_log,
+        )
+        evidence_ledger = _enforce_direct_company_evidence(
+            evidence_ledger,
+            charter=charter,
+            source_map=source_map,
         )
         status = (
             "evidence_needs_review"
@@ -2218,13 +2719,15 @@ def _run_research_impl(
             else:
                 if qa:
                     run_logger.stage_start("qa")
-                    qa_review = _run_qa_review(
+                    report, qa_review = _run_qa_with_conservative_revision(
                         agents=agents,
                         charter=charter,
+                        plan=plan,
                         source_map=source_map,
                         evidence_ledger=evidence_ledger,
                         report=report,
                         agent_runner=agent_runner,
+                        source_fetch_log=source_fetch_log,
                         run_logger=run_logger,
                     )
                     run_logger.stage_end("qa")

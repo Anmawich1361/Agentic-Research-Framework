@@ -54,6 +54,18 @@ def test_classify_evidence_claim_identifies_metadata_and_finding_aid_claims() ->
     )
 
 
+def test_classify_evidence_claim_rejects_retrieval_gap_as_substantive_fact() -> None:
+    assert (
+        classify_evidence_claim(
+            _claim(
+                "gap",
+                "The SEC EDGAR page, as fetched, showed no filings data for Costco.",
+            )
+        )
+        == "unsupported_or_unclear"
+    )
+
+
 def test_classify_evidence_claim_separates_substantive_claims_from_weak_inference() -> None:
     assert (
         classify_evidence_claim(

@@ -10,6 +10,21 @@ from agentic_research.tools.web_search import (
 )
 
 
+class PartiallyFailingSearchProvider:
+    def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+        if "primary source" in query:
+            raise TimeoutError("search timed out")
+        return [
+            SearchResult(
+                title="Recent Costco supplier coverage",
+                publisher="Mock News",
+                url="https://example.com/costco-supplier-news",
+                snippet="Recent reporting on Costco suppliers.",
+                publication_date="2026-04-01",
+            )
+        ][:max_results]
+
+
 def _charter() -> ResearchCharter:
     return ResearchCharter(
         target="Costco",
@@ -116,6 +131,23 @@ def test_web_search_client_continues_after_individual_query_failure(mocker: Any)
     assert [result.url for result in results] == [
         "https://example.com/costco-supplier-news"
     ]
+
+
+def test_web_search_client_records_query_failure_diagnostics(mocker: Any) -> None:
+    mocker.patch(
+        "agentic_research.tools.web_search._sec_filing_fallback_results",
+        return_value=[],
+    )
+    client = WebSearchClient(provider=_FailingThenWorkingProvider())
+
+    client.search_many(build_source_search_queries(_charter(), _plan()))
+
+    assert len(client.last_failures) == 1
+    assert client.last_failures[0].query == (
+        "Costco SEC 10-K annual report site:sec.gov supplier meeting"
+    )
+    assert client.last_failures[0].error_type == "TimeoutError"
+    assert client.last_failures[0].error == "search timeout"
 
 
 class _AlwaysFailingProvider:

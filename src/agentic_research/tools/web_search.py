@@ -39,6 +39,14 @@ class SearchResult(BaseModel):
     publication_date: str | None = None
 
 
+class SearchFailure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    error_type: str
+    error: str
+
+
 class SearchProvider(Protocol):
     def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]: ...
 
@@ -98,11 +106,19 @@ class DuckDuckGoSearchProvider:
 class WebSearchClient:
     def __init__(self, provider: SearchProvider | None = None) -> None:
         self.provider = provider or DuckDuckGoSearchProvider()
+        self.last_failures: list[SearchFailure] = []
 
     def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
         try:
             results = self.provider.search(query, max_results=max_results)
-        except Exception:
+        except Exception as exc:
+            self.last_failures.append(
+                SearchFailure(
+                    query=query,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+            )
             return _sec_filing_fallback_results(query, max_results=max_results)
         if results:
             return results
@@ -114,10 +130,15 @@ class WebSearchClient:
         *,
         max_results_per_query: int = 5,
     ) -> list[SearchResult]:
+        self.last_failures = []
         seen_urls: set[str] = set()
         results: list[SearchResult] = []
         for query in queries:
-            for result in self.search(query, max_results=max_results_per_query):
+            try:
+                query_results = self.search(query, max_results=max_results_per_query)
+            except Exception:
+                continue
+            for result in query_results:
                 if result.url in seen_urls:
                     continue
                 seen_urls.add(result.url)

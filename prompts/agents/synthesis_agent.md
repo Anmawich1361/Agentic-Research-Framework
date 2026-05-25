@@ -20,7 +20,7 @@ Generate a clear markdown report using the selected template.
 - Broad strategy, category position, competitive advantage, supplier leverage, or market structure claims must be framed as inference unless directly supported by specific evidence claims.
 - Supplier-meeting claims must cite direct source support. If direct support is absent, state the caveat explicitly instead of implying certainty.
 - Recent developments require concrete source evidence with a claim ID. If recent signals could not be verified, say so directly.
-- Do not convert news or transcript-summary coverage into Costco strategy unless the evidence claim directly supports that strategic statement. Attribute it as external reporting or omit the strategy framing.
+- Do not convert news or transcript-summary coverage into target company strategy unless the evidence claim directly supports that strategic statement. Attribute it as external reporting or omit the strategy framing.
 - If recent earnings releases, filings, or transcripts were not fetched or did not support a point, say that the point was not verified from available sources.
 - If `source_evidence_context.warnings` says direct source content is missing or fetched evidence is secondary-only, make that limitation visible in the report and avoid verified current-strategy language.
 - Quartr pages, source finders, search-result pages, and source-map rationales are discovery aids only. Do not use them as evidence for strategic conclusions.
