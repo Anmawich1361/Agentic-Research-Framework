@@ -14,9 +14,22 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from agentic_research.models import EvidenceLedger, QAReview, Report, SourceMap  # noqa: E402
+from agentic_research.evidence_pipeline import (  # noqa: E402
+    DIRECT_EVIDENCE_SUFFICIENCY_WARNING,
+    enforce_direct_company_evidence,
+    validate_evidence,
+)
+from agentic_research.models import (  # noqa: E402
+    EvidenceLedger,
+    QAReview,
+    Report,
+    ResearchCharter,
+    SourceFetchLog,
+    SourceMap,
+)
 from agentic_research.qa import run_deterministic_qa_checks  # noqa: E402
 from agentic_research.report_validation import has_heading  # noqa: E402
+from agentic_research.run_artifacts import has_blocking_evidence_warnings  # noqa: E402
 
 
 RUBRIC_NAMES = [
@@ -51,14 +64,24 @@ class FixtureResult:
     passed: bool
     checks: list[CheckResult]
     qa_review: QAReview
+    evidence_ledger: EvidenceLedger
 
     def to_dict(self) -> dict[str, Any]:
+        failed_checks = [check for check in self.checks if not check.passed]
         return {
             "fixture_id": self.fixture_id,
             "name": self.name,
             "score": self.score,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
+            "failed_checks": [check.to_dict() for check in failed_checks],
+            "failure_reasons": [
+                f"{check.name}: {check.detail}" for check in failed_checks
+            ],
+            "evidence_claim_ids": [claim.id for claim in self.evidence_ledger.claims],
+            "evidence_validation_warnings": list(
+                self.evidence_ledger.validation_warnings
+            ),
             "qa_issue_counts": {
                 "high": _issue_count(self.qa_review, "high"),
                 "medium": _issue_count(self.qa_review, "medium"),
@@ -82,6 +105,14 @@ def _issue_count(review: QAReview, severity: str) -> int:
 
 def _issue_categories(review: QAReview) -> set[str]:
     return {issue.category for issue in review.issues if issue.category is not None}
+
+
+def _issue_categories_for_severity(review: QAReview, severity: str) -> set[str]:
+    return {
+        issue.category
+        for issue in review.issues
+        if issue.severity == severity and issue.category is not None
+    }
 
 
 def _issue_details(
@@ -148,6 +179,45 @@ def _check_issue_limit(
     )
 
 
+def _check_issue_floor(
+    *,
+    review: QAReview,
+    severity: str,
+    minimum: int | None,
+) -> CheckResult:
+    count = _issue_count(review, severity)
+    if minimum is None:
+        return CheckResult(
+            name=f"qa_{severity}_min",
+            passed=True,
+            detail=f"{count} {severity} issues; no minimum configured",
+        )
+    return CheckResult(
+        name=f"qa_{severity}_min",
+        passed=count >= minimum,
+        detail=f"{count} {severity} issues; minimum {minimum}",
+    )
+
+
+def _check_required_severity_categories(
+    *,
+    review: QAReview,
+    severity: str,
+    required_categories: list[str],
+) -> CheckResult:
+    categories = _issue_categories_for_severity(review, severity)
+    missing = sorted(set(required_categories) - categories)
+    return CheckResult(
+        name=f"required_{severity}_qa_categories",
+        passed=not missing,
+        detail=(
+            f"all required {severity} issue categories present"
+            if not missing
+            else f"missing {severity} categories: {', '.join(missing)}"
+        ),
+    )
+
+
 def _check_category_expectations(
     *,
     review: QAReview,
@@ -175,13 +245,110 @@ def _check_category_expectations(
     ]
 
 
+def _evidence_ledger_for_fixture(
+    fixture: dict[str, Any],
+    *,
+    source_map: SourceMap,
+) -> EvidenceLedger:
+    evidence_ledger = EvidenceLedger.model_validate(fixture["evidence_ledger"])
+    if "source_fetch_log" in fixture:
+        evidence_ledger = validate_evidence(
+            evidence_ledger.claims,
+            source_map=source_map,
+            source_fetch_log=SourceFetchLog.model_validate(fixture["source_fetch_log"]),
+        )
+    if "charter" in fixture:
+        evidence_ledger = enforce_direct_company_evidence(
+            evidence_ledger,
+            charter=ResearchCharter.model_validate(fixture["charter"]),
+            source_map=source_map,
+        )
+    return evidence_ledger
+
+
+def _check_evidence_expectations(
+    *,
+    evidence_ledger: EvidenceLedger,
+    expected_evidence: dict[str, Any],
+) -> list[CheckResult]:
+    if not expected_evidence:
+        return []
+
+    claim_ids = {claim.id for claim in evidence_ledger.claims}
+    warnings = list(evidence_ledger.validation_warnings)
+    checks: list[CheckResult] = []
+
+    if "remaining_claim_ids" in expected_evidence:
+        expected_remaining = set(expected_evidence["remaining_claim_ids"])
+        checks.append(
+            CheckResult(
+                name="evidence_remaining_claims",
+                passed=claim_ids == expected_remaining,
+                detail=(
+                    f"actual={sorted(claim_ids)}, "
+                    f"expected={sorted(expected_remaining)}"
+                ),
+            )
+        )
+
+    blocked_claim_ids = expected_evidence.get("blocked_claim_ids", [])
+    if blocked_claim_ids:
+        still_present = sorted(set(blocked_claim_ids) & claim_ids)
+        checks.append(
+            CheckResult(
+                name="evidence_claims_blocked",
+                passed=not still_present,
+                detail=(
+                    "all expected blocked claim IDs were removed"
+                    if not still_present
+                    else f"blocked claim IDs still present: {', '.join(still_present)}"
+                ),
+            )
+        )
+
+    required_warning_substrings = expected_evidence.get(
+        "required_warning_substrings",
+        [],
+    )
+    for index, expected_substring in enumerate(required_warning_substrings, start=1):
+        checks.append(
+            CheckResult(
+                name=(
+                    "direct_company_evidence_block"
+                    if expected_substring == DIRECT_EVIDENCE_SUFFICIENCY_WARNING
+                    else f"evidence_warning_{index}"
+                ),
+                passed=any(expected_substring in warning for warning in warnings),
+                detail=(
+                    f"warning present: {expected_substring}"
+                    if any(expected_substring in warning for warning in warnings)
+                    else f"missing warning containing: {expected_substring}"
+                ),
+            )
+        )
+
+    expected_blocking = expected_evidence.get("expect_blocking_warnings")
+    if expected_blocking is not None:
+        actual_blocking = has_blocking_evidence_warnings(evidence_ledger)
+        checks.append(
+            CheckResult(
+                name="evidence_blocking_warnings",
+                passed=actual_blocking is expected_blocking,
+                detail=f"actual={actual_blocking}, expected={expected_blocking}",
+            )
+        )
+
+    return checks
+
+
 def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
     fixture_id = fixture["id"]
     name = fixture.get("name", fixture_id)
     source_map = SourceMap.model_validate(fixture["source_map"])
-    evidence_ledger = EvidenceLedger.model_validate(fixture["evidence_ledger"])
+    evidence_ledger = _evidence_ledger_for_fixture(fixture, source_map=source_map)
     report = Report.model_validate(fixture["draft_report"])
     expected_qa = fixture.get("expected_qa", {})
+    expected_evidence = fixture.get("expected_evidence", {})
 
     review = run_deterministic_qa_checks(
         source_map=source_map,
@@ -197,15 +364,30 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
             severity="high",
             limit=expected_qa.get("max_high_issues"),
         ),
+        _check_issue_floor(
+            review=review,
+            severity="high",
+            minimum=expected_qa.get("min_high_issues"),
+        ),
         _check_issue_limit(
             review=review,
             severity="medium",
             limit=expected_qa.get("max_medium_issues"),
         ),
+        _check_issue_floor(
+            review=review,
+            severity="medium",
+            minimum=expected_qa.get("min_medium_issues"),
+        ),
         _check_issue_limit(
             review=review,
             severity="low",
             limit=expected_qa.get("max_low_issues"),
+        ),
+        _check_issue_floor(
+            review=review,
+            severity="low",
+            minimum=expected_qa.get("min_low_issues"),
         ),
     ]
     checks.extend(
@@ -215,6 +397,19 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
             forbidden_categories=expected_qa.get("forbidden_categories", []),
         )
     )
+    for severity in ("high", "medium", "low"):
+        required_severity_categories = expected_qa.get(
+            f"required_{severity}_categories",
+            [],
+        )
+        if required_severity_categories:
+            checks.append(
+                _check_required_severity_categories(
+                    review=review,
+                    severity=severity,
+                    required_categories=required_severity_categories,
+                )
+            )
 
     expected_ready = expected_qa.get("ready_to_publish")
     if expected_ready is not None:
@@ -270,7 +465,14 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
     checks.append(
         CheckResult(
             name="unsupported_claims",
-            passed=high_unsupported <= int(expected_qa.get("max_high_unsupported_claims", 0)),
+            passed=(
+                (
+                    expected_qa.get("max_high_unsupported_claims") is None
+                    or high_unsupported
+                    <= int(expected_qa["max_high_unsupported_claims"])
+                )
+                and high_unsupported >= int(expected_qa.get("min_high_unsupported_claims", 0))
+            ),
             detail=_detail_or_default(
                 unsupported_details,
                 f"{high_unsupported} high unsupported-claim issues",
@@ -286,11 +488,19 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
     checks.append(
         CheckResult(
             name="source_grounding",
-            passed=not grounding_details,
+            passed=bool(grounding_details)
+            if expected_qa.get("expect_source_grounding_issue", False)
+            else not grounding_details,
             detail=_detail_or_default(
                 grounding_details,
                 "no high-severity grounding issues",
             ),
+        )
+    )
+    checks.extend(
+        _check_evidence_expectations(
+            evidence_ledger=evidence_ledger,
+            expected_evidence=expected_evidence,
         )
     )
 
@@ -303,6 +513,7 @@ def evaluate_fixture(fixture: dict[str, Any]) -> FixtureResult:
         passed=all(check.passed for check in checks),
         checks=checks,
         qa_review=review,
+        evidence_ledger=evidence_ledger,
     )
 
 
@@ -371,6 +582,40 @@ def render_scorecard(results: list[FixtureResult]) -> str:
                     f"  - {issue.severity}/{category}: {issue.problem} "
                     f"Fix: {issue.suggested_fix}"
                 )
+        expected_guardrail_checks = [
+            check
+            for check in result.checks
+            if check.name
+            in {
+                "direct_company_evidence_block",
+                "evidence_blocking_warnings",
+                "evidence_claims_blocked",
+                "evidence_remaining_claims",
+                "required_high_qa_categories",
+                "required_medium_qa_categories",
+            }
+        ]
+        if expected_guardrail_checks:
+            lines.append("- Expected guardrails:")
+            for check in expected_guardrail_checks:
+                check_status = "PASS" if check.passed else "FAIL"
+                lines.append(f"  - {check.name}: {check_status} - {check.detail}")
+
+    lines.extend(["", "## Expected Guardrail Details"])
+    for result in results:
+        guardrail_details = [
+            check.detail
+            for check in result.checks
+            if check.name
+            in {
+                "direct_company_evidence_block",
+                "evidence_blocking_warnings",
+                "evidence_claims_blocked",
+                "required_high_qa_categories",
+            }
+        ]
+        if guardrail_details:
+            lines.append(f"- {result.fixture_id}: {'; '.join(guardrail_details)}")
 
     failed = [result for result in results if not result.passed]
     if failed:

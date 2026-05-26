@@ -1,0 +1,98 @@
+{
+  "id": "fallback_snippet_evidence_blocked",
+  "name": "Fallback-only snippet evidence blocked",
+  "request": "Research Costco before a supplier meeting",
+  "template_name": "meeting_prep.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_blocked_ir",
+        "title": "Costco investor relations overview",
+        "publisher": "Costco Wholesale",
+        "url": "https://example.com/costco-ir",
+        "source_type": "investor_material",
+        "bias_risk": "medium",
+        "relevance_rationale": "Company investor source that was not fetched.",
+        "recommended_uses": ["company updates"],
+        "publication_date": "2026-02-01"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_blocked_ir",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4.5,
+        "include": true
+      }
+    ],
+    "gaps": ["The investor source was represented only by a search snippet."]
+  },
+  "source_fetch_log": {
+    "results": [
+      {
+        "source_id": "src_blocked_ir",
+        "url": "https://example.com/costco-ir",
+        "status": "fallback",
+        "content_type": "search_snippet_only",
+        "title": "Costco investor relations overview",
+        "excerpt": "Costco investor relations page exists but was not fetched.",
+        "error": "HTTP 403",
+        "failure_reason": "http_403"
+      }
+    ]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "snippet_claim",
+        "claim": "The investor page indicates Costco has a current supplier strategy priority.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Supplier/Buyer Angle",
+        "source_id": "src_blocked_ir",
+        "source_url": "https://example.com/costco-ir",
+        "source_type": "investor_material",
+        "quote_or_excerpt": "Costco investor relations page exists but was not fetched."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Costco Supplier Meeting Prep",
+    "source_ids": ["src_blocked_ir"],
+    "claim_ids": ["snippet_claim"],
+    "markdown": "# Costco Supplier Meeting Prep\n\n## Executive Summary\nCostco has a current supplier strategy priority based on the blocked investor page. [snippet_claim]\n\n## Context for Meeting\nThe source was not fetched and should not be treated as report evidence. [snippet_claim]\n\n## What We Know\n- No fetched source text supports this claim.\n\n## What We Do Not Know\n- The actual investor-page content is unknown.\n\n## Supplier/Buyer Angle\nTreat the supplier angle as unverified until direct source content is available.\n\n## Questions to Ask\n- Which primary source should be fetched before publication?\n\n## Risks and Watchouts\n- Fallback snippets are not evidence for material factual claims.\n\n## Evidence Limitations\n- The only raw claim came from fallback metadata/search-snippet context.\n\n## Source Appendix\n- Costco investor relations overview (src_blocked_ir) https://example.com/costco-ir\n"
+  },
+  "expected_evidence": {
+    "remaining_claim_ids": [],
+    "blocked_claim_ids": ["snippet_claim"],
+    "expect_blocking_warnings": true,
+    "required_warning_substrings": [
+      "Dropped unsupported evidence claim ID snippet_claim before synthesis",
+      "No valid evidence claims were extracted from approved sources."
+    ]
+  },
+  "expected_qa": {
+    "ready_to_publish": false,
+    "min_high_issues": 1,
+    "required_high_categories": ["unsupported_claim"],
+    "expect_source_grounding_issue": true,
+    "min_claim_count": 0,
+    "min_source_count": 0
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Context for Meeting",
+    "What We Know",
+    "What We Do Not Know",
+    "Supplier/Buyer Angle",
+    "Questions to Ask",
+    "Risks and Watchouts",
+    "Evidence Limitations",
+    "Source Appendix"
+  ]
+}

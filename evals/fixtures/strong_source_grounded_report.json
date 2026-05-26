@@ -1,0 +1,160 @@
+{
+  "id": "strong_source_grounded_report",
+  "name": "Strong source-grounded report",
+  "request": "Research Nvidia before an investor meeting",
+  "template_name": "investment_memo.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_nvda_10k",
+        "title": "Nvidia annual report",
+        "publisher": "SEC",
+        "url": "https://example.com/nvidia-10k",
+        "source_type": "corporate_filing",
+        "bias_risk": "low",
+        "relevance_rationale": "Primary filing for business and risk context.",
+        "recommended_uses": ["business overview", "risks"],
+        "publication_date": "2026-03-01"
+      },
+      {
+        "id": "src_nvda_results",
+        "title": "Nvidia quarterly results",
+        "publisher": "Nvidia Investor Relations",
+        "url": "https://example.com/nvidia-results",
+        "source_type": "investor_material",
+        "bias_risk": "medium",
+        "relevance_rationale": "Company source for reported operating results.",
+        "recommended_uses": ["financial profile"],
+        "publication_date": "2026-02-21"
+      },
+      {
+        "id": "src_accelerator_market",
+        "title": "AI accelerator market overview",
+        "publisher": "Industry Analyst",
+        "url": "https://example.com/ai-accelerators",
+        "source_type": "industry_primer",
+        "bias_risk": "medium",
+        "relevance_rationale": "Independent context for market demand.",
+        "recommended_uses": ["market context"],
+        "publication_date": "2025-12-15"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_nvda_10k",
+        "authority_score": 5,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 5,
+        "bias_risk": "low",
+        "final_score": 5,
+        "include": true
+      },
+      {
+        "source_id": "src_nvda_results",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4.5,
+        "include": true
+      },
+      {
+        "source_id": "src_accelerator_market",
+        "authority_score": 4,
+        "relevance_score": 4,
+        "recency_score": 4,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4,
+        "include": true
+      }
+    ],
+    "gaps": ["Valuation assumptions are outside this deterministic fixture."]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_business",
+        "claim": "Nvidia reports that accelerated computing products are part of its data-center business.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Business Overview",
+        "source_id": "src_nvda_10k",
+        "source_url": "https://example.com/nvidia-10k",
+        "quote_or_excerpt": "Data center products include accelerated computing platforms."
+      },
+      {
+        "id": "claim_results",
+        "claim": "Nvidia reported data-center revenue in the fixture quarterly results source.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Financial and Operating Profile",
+        "source_id": "src_nvda_results",
+        "source_url": "https://example.com/nvidia-results",
+        "quote_or_excerpt": "Data Center revenue was reported for the quarter."
+      },
+      {
+        "id": "claim_market",
+        "claim": "The market overview links AI accelerator demand to cloud and enterprise AI workloads.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "Market / Industry Context",
+        "source_id": "src_accelerator_market",
+        "source_url": "https://example.com/ai-accelerators",
+        "quote_or_excerpt": "Accelerator demand is connected to cloud and enterprise AI workloads."
+      },
+      {
+        "id": "claim_model",
+        "claim": "Nvidia sells products and related systems through a hardware-centered business model.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Business Model",
+        "source_id": "src_nvda_10k",
+        "source_url": "https://example.com/nvidia-10k",
+        "quote_or_excerpt": "Products and systems are sold to customers and partners."
+      },
+      {
+        "id": "claim_risk",
+        "claim": "Nvidia identifies supply constraints and competition as risk factors in its annual report.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "Risks",
+        "source_id": "src_nvda_10k",
+        "source_url": "https://example.com/nvidia-10k",
+        "quote_or_excerpt": "Supply constraints and competition can affect results."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Nvidia Investment Memo",
+    "source_ids": ["src_nvda_10k", "src_nvda_results", "src_accelerator_market"],
+    "claim_ids": ["claim_business", "claim_results", "claim_market", "claim_model", "claim_risk"],
+    "markdown": "# Nvidia Investment Memo\n\n## Executive Summary\nNvidia diligence should focus on its accelerated-computing business, reported data-center results, market demand context, and stated risks. [claim_business] [claim_results] [claim_market] [claim_risk]\n\n## Business Overview\nNvidia reports that accelerated computing products are part of its data-center business. [claim_business]\n\n## Market / Industry Context\nAI accelerator demand is linked to cloud and enterprise AI workloads in the market overview. [claim_market]\n\n## Business Model\nNvidia sells products and related systems through a hardware-centered business model. [claim_model]\n\n## Financial and Operating Profile\nNvidia reported data-center revenue in the fixture quarterly results source. [claim_results]\n\n## Competitive Landscape\nCompetition is a diligence area because Nvidia identifies competition as a risk factor. [claim_risk]\n\n## Growth Drivers\nCloud and enterprise AI workloads are cited as demand context, while valuation impact remains an open diligence item. [claim_market]\n\n## Risks\nSupply constraints and competition are cited risk factors in the annual report. [claim_risk]\n\n## Open Diligence Questions\n- What valuation assumptions are implied by the reported data-center profile? [claim_results]\n- How should supply constraints be monitored before the investor meeting? [claim_risk]\n\n## Source Appendix\n- Nvidia annual report (src_nvda_10k) https://example.com/nvidia-10k\n- Nvidia quarterly results (src_nvda_results) https://example.com/nvidia-results\n- AI accelerator market overview (src_accelerator_market) https://example.com/ai-accelerators\n"
+  },
+  "expected_qa": {
+    "ready_to_publish": true,
+    "max_high_issues": 0,
+    "max_medium_issues": 0,
+    "max_low_issues": 0,
+    "max_high_unsupported_claims": 0,
+    "forbidden_categories": ["unsupported_claim", "source_gap"],
+    "min_claim_count": 5,
+    "min_source_count": 3,
+    "requires_recent_source": true
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Business Overview",
+    "Market / Industry Context",
+    "Business Model",
+    "Financial and Operating Profile",
+    "Competitive Landscape",
+    "Growth Drivers",
+    "Risks",
+    "Open Diligence Questions",
+    "Source Appendix"
+  ]
+}

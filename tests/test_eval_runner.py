@@ -9,7 +9,7 @@ import httpx
 import evals.run_eval as eval_runner
 
 
-def test_eval_runner_loads_three_fixtures_and_prints_scorecard() -> None:
+def test_eval_runner_loads_fixtures_and_prints_scorecard() -> None:
     result = subprocess.run(
         [sys.executable, "evals/run_eval.py"],
         capture_output=True,
@@ -23,6 +23,11 @@ def test_eval_runner_loads_three_fixtures_and_prints_scorecard() -> None:
     assert "Company meeting prep brief" in result.stdout
     assert "investment_memo" in result.stdout
     assert "industry_primer" in result.stdout
+    assert "unsupported_recent_strategy_claims" in result.stdout
+    assert "fallback_snippet_evidence_blocked" in result.stdout
+    assert "indirect_only_company_evidence_blocked" in result.stdout
+    assert "stale_unknown_claim_ids" in result.stdout
+    assert "thin_conservative_meeting_prep" in result.stdout
     assert "fixtures passed" in result.stdout
     assert "source_grounding" in result.stdout
     assert "evidence_depth" in result.stdout
@@ -48,10 +53,16 @@ def test_eval_fixtures_include_required_phase_12_fields() -> None:
 def test_eval_runner_loads_all_fixture_ids() -> None:
     fixtures = eval_runner.load_fixtures(Path("evals/fixtures"))
 
-    assert {fixture["id"] for fixture in fixtures} == {
+    assert {fixture["id"] for fixture in fixtures} >= {
         "company_meeting_prep",
+        "fallback_snippet_evidence_blocked",
+        "indirect_only_company_evidence_blocked",
         "industry_primer",
         "investment_memo",
+        "stale_unknown_claim_ids",
+        "strong_source_grounded_report",
+        "thin_conservative_meeting_prep",
+        "unsupported_recent_strategy_claims",
     }
 
 
@@ -73,6 +84,8 @@ def test_eval_runner_produces_machine_readable_result_structure() -> None:
         "score",
         "passed",
         "checks",
+        "failed_checks",
+        "failure_reasons",
         "qa_issue_counts",
         "qa_issue_categories",
     } <= first.keys()
@@ -107,6 +120,36 @@ def test_eval_runner_flags_unsupported_claims_in_fixture() -> None:
         and "durable supplier advantage" in issue["problem"]
         for issue in result_data["qa_issues"]
     )
+
+
+def test_eval_runner_treats_expected_guardrail_blocks_as_passing_evals() -> None:
+    results, scorecard = eval_runner.run(Path("evals/fixtures"))
+    by_id = {result.fixture_id: result for result in results}
+
+    assert all(result.passed for result in results)
+    assert _check_passed(by_id["unsupported_recent_strategy_claims"], "qa_high_min")
+    assert _check_passed(
+        by_id["unsupported_recent_strategy_claims"],
+        "required_high_qa_categories",
+    )
+    assert "missing_recent_signal" in by_id[
+        "unsupported_recent_strategy_claims"
+    ].to_dict()["qa_issue_categories"]
+    assert _check_passed(
+        by_id["fallback_snippet_evidence_blocked"],
+        "evidence_claims_blocked",
+    )
+    assert _check_passed(
+        by_id["indirect_only_company_evidence_blocked"],
+        "direct_company_evidence_block",
+    )
+    assert _check_passed(by_id["stale_unknown_claim_ids"], "required_high_qa_categories")
+    assert _check_passed(by_id["thin_conservative_meeting_prep"], "report_usefulness")
+    assert "Expected Guardrail Details" in scorecard
+
+
+def _check_passed(result: eval_runner.FixtureResult, name: str) -> bool:
+    return any(check.name == name and check.passed for check in result.checks)
 
 
 def test_eval_runner_does_not_call_live_apis_by_default(monkeypatch) -> None:

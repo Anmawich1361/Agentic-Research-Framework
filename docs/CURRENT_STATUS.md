@@ -120,6 +120,24 @@ Blocked runs retain review artifacts such as `draft_report.md`,
 `qa_review.json`, `report_revision.md`, `evidence_review.md`, or
 `artifact_review.md` as applicable.
 
+## 2026-05-26 Evaluation Harness Milestone
+
+The deterministic eval system now covers quality and workflow-safety
+regressions instead of only publishable happy paths:
+
+- `make eval` runs publishable and expected-blocking fixtures for source
+  grounding, fallback-only evidence, indirect-only company evidence, stale claim
+  IDs, and thin conservative meeting-prep reports.
+- `make eval-regression` runs fake-agent `run_research` and
+  `continue_research` scenarios to verify `metadata.status`, `report.md`
+  publication rules, `evidence_review.md`, `report_revision.md`, and fallback
+  evidence blocking.
+- Both eval runners produce markdown scorecards and optional JSON results for
+  CI/Codex review.
+
+This milestone is intended to make evidence safety, traceability, artifact
+contracts, and publication gates measurable before future quality changes.
+
 ## 2026-05-25 Orchestrator Helper Extraction
 
 This pass reduced `src/agentic_research/orchestrator.py` from about 2,800 lines

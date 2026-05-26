@@ -1,0 +1,75 @@
+{
+  "id": "stale_unknown_claim_ids",
+  "name": "Stale unknown claim IDs fail traceability",
+  "request": "Research Costco before a supplier meeting",
+  "template_name": "meeting_prep.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_costco_vendor",
+        "title": "Costco vendor information",
+        "publisher": "Costco Wholesale",
+        "url": "https://example.com/costco-vendor",
+        "source_type": "primary_company",
+        "bias_risk": "medium",
+        "relevance_rationale": "Primary vendor contact and onboarding context.",
+        "recommended_uses": ["supplier meeting"],
+        "publication_date": "2026-01-15"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_costco_vendor",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4.5,
+        "include": true
+      }
+    ],
+    "gaps": []
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_vendor_routing",
+        "claim": "Costco publishes vendor contact paths for prospective suppliers.",
+        "claim_type": "fact",
+        "confidence": "high",
+        "report_section": "What We Know",
+        "source_id": "src_costco_vendor",
+        "source_url": "https://example.com/costco-vendor",
+        "quote_or_excerpt": "Vendor inquiries may be directed to the applicable buying office."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Costco Supplier Meeting Prep",
+    "source_ids": ["src_costco_vendor"],
+    "claim_ids": ["claim_vendor_routing", "claim_stale"],
+    "markdown": "# Costco Supplier Meeting Prep\n\n## Executive Summary\nCostco publishes vendor contact paths for prospective suppliers. [claim_vendor_routing]\n\n## Context for Meeting\nThis sentence cites a stale claim ID that is not in the final evidence ledger. [claim_stale]\n\n## What We Know\n- Costco publishes vendor contact paths for prospective suppliers. [claim_vendor_routing]\n\n## What We Do Not Know\n- The stale claim ID has no evidence-ledger support.\n\n## Supplier/Buyer Angle\nTreat unsupported claim IDs as a publication blocker.\n\n## Questions to Ask\n- Which buying office and category should the supplier prepare for? [claim_vendor_routing]\n\n## Risks and Watchouts\n- Reports must not restore dropped or stale claim IDs.\n\n## Evidence Limitations\n- This traceability fixture intentionally includes one unknown claim ID.\n\n## Source Appendix\n- Costco vendor information (src_costco_vendor) https://example.com/costco-vendor\n"
+  },
+  "expected_qa": {
+    "ready_to_publish": false,
+    "min_high_issues": 1,
+    "required_high_categories": ["unsupported_claim"],
+    "min_high_unsupported_claims": 1,
+    "expect_source_grounding_issue": true,
+    "min_claim_count": 1,
+    "min_source_count": 1
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Context for Meeting",
+    "What We Know",
+    "What We Do Not Know",
+    "Supplier/Buyer Angle",
+    "Questions to Ask",
+    "Risks and Watchouts",
+    "Evidence Limitations",
+    "Source Appendix"
+  ]
+}
