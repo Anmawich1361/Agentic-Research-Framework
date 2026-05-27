@@ -1,0 +1,118 @@
+{
+  "id": "indirect_only_company_evidence_blocked",
+  "name": "Indirect-only company evidence blocked",
+  "request": "Research Acme Robotics before an investor meeting",
+  "template_name": "company_brief.md",
+  "charter": {
+    "target": "Acme Robotics",
+    "target_type": "company",
+    "research_lens": "investment",
+    "depth": "brief",
+    "deliverable": "company_brief",
+    "key_questions": ["What should investors know about Acme Robotics?"],
+    "geography": "United States",
+    "time_horizon": "current and recent developments"
+  },
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_robotics_industry",
+        "title": "Warehouse robotics industry overview",
+        "publisher": "Industry Analyst",
+        "url": "https://example.com/robotics-industry",
+        "source_type": "industry_primer",
+        "bias_risk": "medium",
+        "relevance_rationale": "Indirect sector context, not company evidence.",
+        "recommended_uses": ["market context"],
+        "publication_date": "2026-01-10"
+      },
+      {
+        "id": "src_robotics_news",
+        "title": "Warehouse automation news roundup",
+        "publisher": "Trade Publication",
+        "url": "https://example.com/robotics-news",
+        "source_type": "news",
+        "bias_risk": "medium",
+        "relevance_rationale": "Indirect news context, not company evidence.",
+        "recommended_uses": ["sector news"],
+        "publication_date": "2026-02-01"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_robotics_industry",
+        "authority_score": 4,
+        "relevance_score": 4,
+        "recency_score": 5,
+        "coverage_score": 3,
+        "bias_risk": "medium",
+        "final_score": 4,
+        "include": true
+      },
+      {
+        "source_id": "src_robotics_news",
+        "authority_score": 3,
+        "relevance_score": 4,
+        "recency_score": 5,
+        "coverage_score": 3,
+        "bias_risk": "medium",
+        "final_score": 3.7,
+        "include": true
+      }
+    ],
+    "gaps": ["No direct company, filing, investor, or earnings source is available."]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_sector",
+        "claim": "Warehouse robotics industry demand is linked to automation projects.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "Market Context",
+        "source_id": "src_robotics_industry",
+        "source_url": "https://example.com/robotics-industry",
+        "quote_or_excerpt": "Automation projects can support demand for warehouse robotics."
+      },
+      {
+        "id": "claim_news",
+        "claim": "Trade coverage describes warehouse automation as an active sector topic.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "Recent Developments",
+        "source_id": "src_robotics_news",
+        "source_url": "https://example.com/robotics-news",
+        "quote_or_excerpt": "Warehouse automation remained an active topic in trade coverage."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Acme Robotics Company Brief",
+    "source_ids": ["src_robotics_industry", "src_robotics_news"],
+    "claim_ids": ["claim_sector", "claim_news"],
+    "markdown": "# Acme Robotics Company Brief\n\n## Executive Summary\nOnly indirect sector context is available, so this fixture should block before synthesis for a company report. [claim_sector] [claim_news]\n\n## Business Overview\nNo direct company source supports a business overview.\n\n## Market Context\nWarehouse robotics industry demand is linked to automation projects. [claim_sector]\n\n## Competitive Landscape\nNo direct company evidence identifies Acme Robotics competitors.\n\n## Recent Developments\nTrade coverage describes warehouse automation as an active sector topic, but it does not verify Acme Robotics developments. [claim_news]\n\n## Risks\nThe company-specific evidence gap is the primary risk.\n\n## Open Questions\n- Which company filing, investor, earnings, or primary company source can be fetched?\n\n## Evidence Limitations\n- Available claims are indirect sector context, not direct company evidence.\n\n## Source Appendix\n- Warehouse robotics industry overview (src_robotics_industry) https://example.com/robotics-industry\n- Warehouse automation news roundup (src_robotics_news) https://example.com/robotics-news\n"
+  },
+  "expected_evidence": {
+    "remaining_claim_ids": ["claim_sector", "claim_news"],
+    "expect_blocking_warnings": true,
+    "required_warning_substrings": [
+      "No direct company, filing, investor, or earnings evidence claims remained after filtering; fetched source content is too indirect for a source-grounded company report."
+    ]
+  },
+  "expected_qa": {
+    "min_claim_count": 2,
+    "min_source_count": 2
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Business Overview",
+    "Market Context",
+    "Competitive Landscape",
+    "Recent Developments",
+    "Risks",
+    "Open Questions",
+    "Evidence Limitations",
+    "Source Appendix"
+  ]
+}
