@@ -14,6 +14,31 @@ Future milestone PRs should use that plan for scope control, preserve the
 existing evidence/report/QA publication gates, and update this status document
 after each completed milestone.
 
+## 2026-05-27 Shared Synthesis/QA Flow Milestone
+
+The live full-run and continue-run branches now share their post-evidence
+synthesis and QA path:
+
+- `_build_synthesis_payload` constructs the synthesis prompt payload for both
+  `run_research` and `continue_research`; continuation feedback is added only
+  for continued runs.
+- `_run_synthesis_and_qa` owns synthesis execution, missing-section repair,
+  traceability and section validation, report-revision artifact writing,
+  QA with conservative revision, final status selection, and `report.md`
+  publication eligibility.
+- Public function signatures, CLI behavior, mock mode, artifact filenames,
+  evidence gates, QA high-severity blocking, and final-report publication gates
+  remain unchanged.
+
+Validation for this milestone:
+
+- `make doctor`: ok after repairing the local `.venv`.
+- `make check`: 154 tests passed; Ruff passed; mypy passed.
+- `make eval`: 9/9 fixtures passed.
+- `make eval-regression`: 5/5 workflow scenarios passed.
+- `make smoke-mock`: wrote a deterministic checkpoint run.
+- `git diff --check`: ok.
+
 ## Recent Merges
 
 PR #5 implemented phases 9-14 in one large merge. It added or hardened the

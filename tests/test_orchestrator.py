@@ -25,6 +25,7 @@ from agentic_research.models import (
 from agentic_research.orchestrator import (
     DIRECT_EVIDENCE_SUFFICIENCY_WARNING,
     _create_conservative_report,
+    _build_synthesis_payload,
     _deduplicate_claims,
     _merge_specialist_claims,
     _source_content_payload,
@@ -1336,6 +1337,56 @@ def test_continue_includes_user_feedback_and_excludes_rejected_sources(
     assert result.report.source_ids == ["src_keep"]
     source_map = json.loads((checkpoint.run_dir / "source_map.json").read_text())
     assert [source["id"] for source in source_map["sources"]] == ["src_keep"]
+
+
+def test_synthesis_payload_builder_scopes_user_feedback_to_continue() -> None:
+    charter = ResearchCharter(
+        target="Costco",
+        target_type="company",
+        research_lens="sales",
+        depth="brief",
+        deliverable="meeting_prep_brief",
+        key_questions=["What matters before the supplier meeting?"],
+    )
+    plan = ResearchPlan(
+        research_questions=["How does Costco describe operating cash flow?"],
+        report_sections=["overview"],
+        required_source_types=["corporate_filing"],
+        checkpoint_questions=["Which category should the supplier prioritize?"],
+        data_gaps=["Supplier category is not specified."],
+    )
+    source_map = _sec_source_map()
+    evidence_ledger = _validate_evidence([_costco_cash_flow_claim()], source_map=source_map)
+    payload_kwargs = {
+        "charter": charter,
+        "plan": plan,
+        "source_map": source_map,
+        "evidence_ledger": evidence_ledger,
+        "specialist_analyses": [],
+        "source_content": [],
+        "source_fetch_log": None,
+    }
+
+    full_payload = _build_synthesis_payload(**payload_kwargs)
+    continue_payload = _build_synthesis_payload(
+        **payload_kwargs,
+        feedback=UserFeedback(
+            user_notes="Focus on margin resilience.",
+            priority_topics=["cash flow"],
+        ),
+    )
+
+    assert full_payload["allowed_claim_ids"] == ["c9"]
+    assert "user_feedback" not in full_payload
+    assert not any(
+        "user_feedback" in requirement
+        for requirement in full_payload["section_requirements"]
+    )
+    assert continue_payload["user_feedback"]["priority_topics"] == ["cash flow"]
+    assert any(
+        "Reflect user_feedback priorities" in requirement
+        for requirement in continue_payload["section_requirements"]
+    )
 
 
 def test_mock_checkpoint_metadata_and_structured_log_include_run_lifecycle(
