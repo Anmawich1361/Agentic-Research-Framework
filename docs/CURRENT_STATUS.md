@@ -1,6 +1,18 @@
 # Current Status
 
-This note records the stabilization point after PR #5 and PR #6.
+This note records successive stabilization points for the CLI-first framework.
+
+## 2026-05-27 Project Completion Roadmap
+
+`docs/PROJECT_COMPLETION_PLAN.md` is now the authoritative V1 completion
+roadmap. It defines the CLI-first completion bar, hard non-goals, current
+validated state after the live-QA gating and helper-extraction work, remaining
+milestones, acceptance criteria, required validation commands, future Codex PR
+rules, and stop rules.
+
+Future milestone PRs should use that plan for scope control, preserve the
+existing evidence/report/QA publication gates, and update this status document
+after each completed milestone.
 
 ## Recent Merges
 
