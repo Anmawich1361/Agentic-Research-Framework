@@ -111,6 +111,13 @@ DIRECT_EVIDENCE_SUFFICIENCY_WARNING = (
 _deduplicate_claims = _evidence_pipeline.deduplicate_claims
 
 
+class _SynthesisQaResult(BaseModel):
+    report: Report | None
+    qa_review: QAReview | None
+    status: str
+    write_final_report: bool
+
+
 def _new_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"run_{timestamp}_{uuid4().hex[:8]}"
@@ -458,6 +465,91 @@ def _specialist_analyses_payload_for_synthesis(
     return payload
 
 
+def _build_synthesis_payload(
+    *,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+    specialist_analyses: list[SpecialistAnalysis],
+    source_content: list[SourceContent],
+    source_fetch_log: SourceFetchLog | None,
+    feedback: UserFeedback | None = None,
+) -> dict[str, Any]:
+    template_name = select_report_template_name(charter)
+    required_sections = required_sections_for_report(
+        template_name=template_name,
+        evidence_ledger=evidence_ledger,
+        source_map=source_map,
+    )
+    section_requirements = [
+        "Follow required_sections exactly; do not rename or merge them.",
+        "Use the selected_report_template heading sequence as the report outline.",
+        "For meeting prep, What We Do Not Know is mandatory.",
+        "If Evidence Limitations is listed, explain that the source set is thin.",
+    ]
+    if feedback is not None:
+        section_requirements.extend(
+            [
+                "Reflect user_feedback priorities in open questions and caveats.",
+                "Treat user_feedback as user context, not as source evidence.",
+            ]
+        )
+        gap_sources = (
+            "research_plan.checkpoint_questions, source_map.gaps, "
+            "research_plan.data_gaps, or user_feedback."
+        )
+    else:
+        gap_sources = (
+            "research_plan.checkpoint_questions, source_map.gaps, "
+            "or research_plan.data_gaps."
+        )
+    section_requirements.extend(
+        [
+            "If needed, write empty-but-honest gap sections from " + gap_sources,
+            "Do not invent factual content to fill required sections.",
+        ]
+    )
+    payload = {
+        "charter": charter.model_dump(mode="json"),
+        "research_plan": plan.model_dump(mode="json"),
+        "source_map": source_map.model_dump(mode="json"),
+        "evidence_ledger": evidence_ledger.model_dump(mode="json"),
+        "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
+        "specialist_analyses": _specialist_analyses_payload_for_synthesis(
+            specialist_analyses,
+            evidence_ledger=evidence_ledger,
+        ),
+        "selected_report_template": {
+            "name": template_name,
+            "markdown": load_template(template_name),
+        },
+        "required_sections": required_sections,
+        "section_requirements": section_requirements,
+        "source_reference_rule": (
+            "Use only source IDs from source_map. Include Source IDs and URLs "
+            "in the Source Appendix."
+        ),
+        "claim_reference_rules": _claim_reference_rules(evidence_ledger),
+        "claim_reference_rule": (
+            "Use only IDs in allowed_claim_ids. Every material factual report "
+            "statement must cite an allowed evidence ledger claim ID in "
+            "[claim_id] form. Populate claim_ids with every allowed claim ID "
+            "cited in markdown."
+        ),
+        "quality_rules": _synthesis_quality_rules(),
+        "source_evidence_context": _synthesis_source_evidence_context(
+            source_map=source_map,
+            source_content=source_content,
+            source_fetch_log=source_fetch_log,
+        ),
+        "output_schema": "Report",
+    }
+    if feedback is not None:
+        payload["user_feedback"] = _user_feedback_prompt_payload(feedback)
+    return payload
+
+
 def _run_qa_with_conservative_revision(
     *,
     agents: Any,
@@ -533,6 +625,114 @@ def _should_write_final_report(
         and qa_requested
         and qa_review is not None
         and not has_high_severity_issues(qa_review)
+    )
+
+
+def _run_synthesis_and_qa(
+    *,
+    agents: Any,
+    charter: ResearchCharter,
+    plan: ResearchPlan,
+    source_map: SourceMap,
+    evidence_ledger: EvidenceLedgerModel,
+    specialist_analyses: list[SpecialistAnalysis],
+    source_content: list[SourceContent],
+    source_fetch_log: SourceFetchLog | None,
+    qa: bool,
+    agent_runner: AgentRunner | None,
+    run_dir: Path,
+    run_logger: RunLogger,
+    feedback: UserFeedback | None = None,
+) -> _SynthesisQaResult:
+    if _has_blocking_evidence_warnings(evidence_ledger):
+        return _SynthesisQaResult(
+            report=None,
+            qa_review=None,
+            status="evidence_needs_review",
+            write_final_report=False,
+        )
+
+    template_name = select_report_template_name(charter)
+    synthesis_payload = _build_synthesis_payload(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        specialist_analyses=specialist_analyses,
+        source_content=source_content,
+        source_fetch_log=source_fetch_log,
+        feedback=feedback,
+    )
+    run_logger.stage_start("synthesis")
+    report = cast(
+        Report,
+        _run_live_agent(
+            "synthesis",
+            agents.synthesis,
+            _json_prompt("Generate a cited markdown report.", synthesis_payload),
+            agent_runner=agent_runner,
+            run_logger=run_logger,
+        ),
+    )
+    run_logger.stage_end("synthesis")
+    report = _repair_missing_report_sections(
+        report,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        template_name=template_name,
+    )
+
+    qa_review = None
+    try:
+        validate_report_traceability(
+            report,
+            evidence_ledger=evidence_ledger,
+            source_map=source_map,
+        )
+        validate_report_sections(
+            report,
+            template_name=template_name,
+            evidence_ledger=evidence_ledger,
+            source_map=source_map,
+        )
+    except ReportSectionValidationError as exc:
+        report = report.model_copy(update={"status": "draft_needs_revision"})
+        _write_report_revision_artifact(
+            run_dir,
+            error=exc,
+            evidence_ledger=evidence_ledger,
+            run_logger=run_logger,
+        )
+        status = "draft_needs_revision"
+    else:
+        if qa:
+            run_logger.stage_start("qa")
+            report, qa_review = _run_qa_with_conservative_revision(
+                agents=agents,
+                charter=charter,
+                plan=plan,
+                source_map=source_map,
+                evidence_ledger=evidence_ledger,
+                report=report,
+                agent_runner=agent_runner,
+                source_fetch_log=source_fetch_log,
+                run_logger=run_logger,
+            )
+            run_logger.stage_end("qa")
+            status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
+        else:
+            status = "draft_needs_qa"
+
+    return _SynthesisQaResult(
+        report=report,
+        qa_review=qa_review,
+        status=status,
+        write_final_report=_should_write_final_report(
+            report=report,
+            qa_requested=qa,
+            qa_review=qa_review,
+        ),
     )
 
 
@@ -836,129 +1036,31 @@ def _continue_research_impl(
 
     report = None
     qa_review = None
+    write_final_report = False
     status = (
         "evidence_needs_review"
         if _has_blocking_evidence_warnings(evidence_ledger)
         else "evidence_ready"
     )
-    if not _has_blocking_evidence_warnings(evidence_ledger):
-        template_name = select_report_template_name(charter)
-        required_sections = required_sections_for_report(
-            template_name=template_name,
-            evidence_ledger=evidence_ledger,
-            source_map=source_map,
-        )
-        synthesis_payload = {
-            "charter": charter.model_dump(mode="json"),
-            "research_plan": plan.model_dump(mode="json"),
-            "source_map": source_map.model_dump(mode="json"),
-            "evidence_ledger": evidence_ledger.model_dump(mode="json"),
-            "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
-            "specialist_analyses": _specialist_analyses_payload_for_synthesis(
-                specialist_analyses,
-                evidence_ledger=evidence_ledger,
-            ),
-            "user_feedback": feedback_payload,
-            "selected_report_template": {
-                "name": template_name,
-                "markdown": load_template(template_name),
-            },
-            "required_sections": required_sections,
-            "section_requirements": [
-                "Follow required_sections exactly; do not rename or merge them.",
-                "Use the selected_report_template heading sequence as the report outline.",
-                "For meeting prep, What We Do Not Know is mandatory.",
-                "If Evidence Limitations is listed, explain that the source set is thin.",
-                "Reflect user_feedback priorities in open questions and caveats.",
-                "Treat user_feedback as user context, not as source evidence.",
-                "If needed, write empty-but-honest gap sections from "
-                "research_plan.checkpoint_questions, source_map.gaps, "
-                "research_plan.data_gaps, or user_feedback.",
-                "Do not invent factual content to fill required sections.",
-            ],
-            "source_reference_rule": (
-                "Use only source IDs from source_map. Include Source IDs and URLs "
-                "in the Source Appendix."
-            ),
-            "claim_reference_rules": _claim_reference_rules(evidence_ledger),
-            "claim_reference_rule": (
-                "Use only IDs in allowed_claim_ids. Every material factual report "
-                "statement must cite an allowed evidence ledger claim ID in "
-                "[claim_id] form. Populate claim_ids with every allowed claim ID "
-                "cited in markdown."
-            ),
-            "quality_rules": _synthesis_quality_rules(),
-            "source_evidence_context": _synthesis_source_evidence_context(
-                source_map=source_map,
-                source_content=source_content,
-                source_fetch_log=source_fetch_log,
-            ),
-            "output_schema": "Report",
-        }
-        run_logger.stage_start("synthesis")
-        report = cast(
-            Report,
-            _run_live_agent(
-                "synthesis",
-                agents.synthesis,
-                _json_prompt("Generate a cited markdown report.", synthesis_payload),
-                agent_runner=agent_runner,
-                run_logger=run_logger,
-            ),
-        )
-        run_logger.stage_end("synthesis")
-        report = _repair_missing_report_sections(
-            report,
-            plan=plan,
-            source_map=source_map,
-            evidence_ledger=evidence_ledger,
-            template_name=template_name,
-        )
-        try:
-            validate_report_traceability(
-                report,
-                evidence_ledger=evidence_ledger,
-                source_map=source_map,
-            )
-            validate_report_sections(
-                report,
-                template_name=template_name,
-                evidence_ledger=evidence_ledger,
-                source_map=source_map,
-            )
-        except ReportSectionValidationError as exc:
-            report = report.model_copy(update={"status": "draft_needs_revision"})
-            _write_report_revision_artifact(
-                run_dir,
-                error=exc,
-                evidence_ledger=evidence_ledger,
-                run_logger=run_logger,
-            )
-            status = "draft_needs_revision"
-        else:
-            if qa:
-                run_logger.stage_start("qa")
-                report, qa_review = _run_qa_with_conservative_revision(
-                    agents=agents,
-                    charter=charter,
-                    plan=plan,
-                    source_map=source_map,
-                    evidence_ledger=evidence_ledger,
-                    report=report,
-                    agent_runner=agent_runner,
-                    source_fetch_log=source_fetch_log,
-                    run_logger=run_logger,
-                )
-                run_logger.stage_end("qa")
-                status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
-            else:
-                status = "draft_needs_qa"
-
-    write_final_report = _should_write_final_report(
-        report=report,
-        qa_requested=qa,
-        qa_review=qa_review,
+    synthesis_result = _run_synthesis_and_qa(
+        agents=agents,
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        evidence_ledger=evidence_ledger,
+        specialist_analyses=specialist_analyses,
+        source_content=source_content,
+        source_fetch_log=source_fetch_log,
+        qa=qa,
+        agent_runner=agent_runner,
+        run_dir=run_dir,
+        run_logger=run_logger,
+        feedback=feedback,
     )
+    report = synthesis_result.report
+    qa_review = synthesis_result.qa_review
+    status = synthesis_result.status
+    write_final_report = synthesis_result.write_final_report
     return _write_checkpoint_artifacts(
         run_id=metadata.run_id,
         run_dir=run_dir,
@@ -1264,6 +1366,7 @@ def _run_research_impl(
     source_content: list[SourceContent] = []
     source_fetch_log: SourceFetchLog | None = None
     specialist_analyses: list[SpecialistAnalysis] = []
+    write_final_report = False
     status = "checkpoint_ready"
     if full:
         selected_specialists = select_specialists(charter, plan)
@@ -1387,123 +1490,24 @@ def _run_research_impl(
             if _has_blocking_evidence_warnings(evidence_ledger)
             else "evidence_ready"
         )
-        if not _has_blocking_evidence_warnings(evidence_ledger):
-            template_name = select_report_template_name(charter)
-            required_sections = required_sections_for_report(
-                template_name=template_name,
-                evidence_ledger=evidence_ledger,
-                source_map=source_map,
-            )
-            synthesis_payload = {
-                "charter": charter.model_dump(mode="json"),
-                "research_plan": plan.model_dump(mode="json"),
-                "source_map": source_map.model_dump(mode="json"),
-                "evidence_ledger": evidence_ledger.model_dump(mode="json"),
-                "allowed_claim_ids": _allowed_claim_ids(evidence_ledger),
-                "specialist_analyses": _specialist_analyses_payload_for_synthesis(
-                    specialist_analyses,
-                    evidence_ledger=evidence_ledger,
-                ),
-                "selected_report_template": {
-                    "name": template_name,
-                    "markdown": load_template(template_name),
-                },
-                "required_sections": required_sections,
-                "section_requirements": [
-                    "Follow required_sections exactly; do not rename or merge them.",
-                    "Use the selected_report_template heading sequence as the report outline.",
-                    "For meeting prep, What We Do Not Know is mandatory.",
-                    "If Evidence Limitations is listed, explain that the source set is thin.",
-                    "If needed, write empty-but-honest gap sections from "
-                    "research_plan.checkpoint_questions, source_map.gaps, "
-                    "or research_plan.data_gaps.",
-                    "Do not invent factual content to fill required sections.",
-                ],
-                "source_reference_rule": (
-                    "Use only source IDs from source_map. Include Source IDs and URLs "
-                    "in the Source Appendix."
-                ),
-                "claim_reference_rules": _claim_reference_rules(evidence_ledger),
-                "claim_reference_rule": (
-                    "Use only IDs in allowed_claim_ids. Every material factual report "
-                    "statement must cite an allowed evidence ledger claim ID in "
-                    "[claim_id] form. Populate claim_ids with every allowed claim ID "
-                    "cited in markdown."
-                ),
-                "quality_rules": _synthesis_quality_rules(),
-                "source_evidence_context": _synthesis_source_evidence_context(
-                    source_map=source_map,
-                    source_content=source_content,
-                    source_fetch_log=source_fetch_log,
-                ),
-                "output_schema": "Report",
-            }
-            run_logger.stage_start("synthesis")
-            report = cast(
-                Report,
-                _run_live_agent(
-                    "synthesis",
-                    agents.synthesis,
-                    _json_prompt("Generate a cited markdown report.", synthesis_payload),
-                    agent_runner=agent_runner,
-                    run_logger=run_logger,
-                ),
-            )
-            run_logger.stage_end("synthesis")
-            report = _repair_missing_report_sections(
-                report,
-                plan=plan,
-                source_map=source_map,
-                evidence_ledger=evidence_ledger,
-                template_name=template_name,
-            )
-            try:
-                validate_report_traceability(
-                    report,
-                    evidence_ledger=evidence_ledger,
-                    source_map=source_map,
-                )
-                validate_report_sections(
-                    report,
-                    template_name=template_name,
-                    evidence_ledger=evidence_ledger,
-                    source_map=source_map,
-                )
-            except ReportSectionValidationError as exc:
-                report = report.model_copy(update={"status": "draft_needs_revision"})
-                _write_report_revision_artifact(
-                    run_dir,
-                    error=exc,
-                    evidence_ledger=evidence_ledger,
-                    run_logger=run_logger,
-                )
-                status = "draft_needs_revision"
-            else:
-                if qa:
-                    run_logger.stage_start("qa")
-                    report, qa_review = _run_qa_with_conservative_revision(
-                        agents=agents,
-                        charter=charter,
-                        plan=plan,
-                        source_map=source_map,
-                        evidence_ledger=evidence_ledger,
-                        report=report,
-                        agent_runner=agent_runner,
-                        source_fetch_log=source_fetch_log,
-                        run_logger=run_logger,
-                    )
-                    run_logger.stage_end("qa")
-                    status = (
-                        "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
-                    )
-                else:
-                    status = "draft_needs_qa"
-
-    write_final_report = _should_write_final_report(
-        report=report,
-        qa_requested=qa,
-        qa_review=qa_review,
-    )
+        synthesis_result = _run_synthesis_and_qa(
+            agents=agents,
+            charter=charter,
+            plan=plan,
+            source_map=source_map,
+            evidence_ledger=evidence_ledger,
+            specialist_analyses=specialist_analyses,
+            source_content=source_content,
+            source_fetch_log=source_fetch_log,
+            qa=qa,
+            agent_runner=agent_runner,
+            run_dir=run_dir,
+            run_logger=run_logger,
+        )
+        report = synthesis_result.report
+        qa_review = synthesis_result.qa_review
+        status = synthesis_result.status
+        write_final_report = synthesis_result.write_final_report
 
     return _write_checkpoint_artifacts(
         run_id=run_id,
