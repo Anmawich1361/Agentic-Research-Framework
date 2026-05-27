@@ -26,8 +26,10 @@ agent mode. Current supported workflow stages are:
 Final report publication is intentionally gated. `report.md` is written only
 when QA is requested, QA runs, and there are no high-severity QA issues.
 
-For the post-PR #5 and PR #6 state, see
-[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md).
+For the latest stabilization state, see
+[`docs/CURRENT_STATUS.md`](docs/CURRENT_STATUS.md). For the authoritative V1
+completion roadmap, see
+[`docs/PROJECT_COMPLETION_PLAN.md`](docs/PROJECT_COMPLETION_PLAN.md).
 
 Core reference docs:
 
@@ -35,6 +37,7 @@ Core reference docs:
 - [Run status contract](docs/RUN_STATUS.md)
 - [Local development](docs/LOCAL_DEVELOPMENT.md)
 - [Current status](docs/CURRENT_STATUS.md)
+- [Project completion plan](docs/PROJECT_COMPLETION_PLAN.md)
 
 ## Setup
 
@@ -219,8 +222,8 @@ Important statuses:
 - Search and source fetch quality can limit evidence depth.
 - Draft quality can still be blocked by content QA even when claim-ID integrity
   is valid.
-- The orchestrator remains large and will need refactoring before broad feature
-  expansion.
+- The orchestrator is smaller after helper extraction but still duplicates some
+  live/continue synthesis and QA flow.
 - There is no web app, database, authentication, background job system,
   scheduler, vector database, or document export workflow.
 
