@@ -471,6 +471,28 @@ def test_recent_evidence_gap_caveat_is_allowed_to_proceed_to_qa() -> None:
     assert issues == []
 
 
+def test_uncaveated_recent_claim_requires_dated_direct_source() -> None:
+    report = _complete_meeting_report(
+        "## Supplier/Buyer Angle\n"
+        "Costco's recent e-commerce growth should shape supplier questions. [c_news]"
+    )
+
+    issues = validate_report(
+        report,
+        evidence_ledger=_quality_ledger(),
+        source_map=_quality_source_map(),
+        template_name="meeting_prep.md",
+    ).issues
+
+    assert not any(issue.category == "missing_recent_signal" for issue in issues)
+    assert any(
+        issue.severity == "medium"
+        and issue.category == "stale_or_unclear_recency"
+        and "publication date" in issue.problem
+        for issue in issues
+    )
+
+
 def test_source_finding_aid_claims_are_not_promoted_to_strategy() -> None:
     ledger = _quality_ledger().model_copy(
         update={

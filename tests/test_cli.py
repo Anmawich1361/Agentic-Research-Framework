@@ -243,6 +243,11 @@ def test_cli_review_run_command_writes_artifact_review(tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "artifact_review:" in result.stdout
+    assert "status: draft_needs_qa" in result.stdout
+    assert "final_report_published: no" in result.stdout
+    assert "qa_issues: high=0 medium=0 low=0" in result.stdout
+    assert "source_fetches:" in result.stdout
+    assert "next_action:" in result.stdout
     assert (run_dir / "artifact_review.md").exists()
 
 

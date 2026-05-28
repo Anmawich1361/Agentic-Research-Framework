@@ -120,7 +120,6 @@ _RECENT_CLAIM_MARKERS = (
     "earnings",
     "e-commerce",
     "latest",
-    "membership",
     "quarter",
     "recent",
     "same-store",
@@ -430,6 +429,13 @@ def _claim_is_direct_evidence(claim: object | None, source: object | None) -> bo
     return claim_type == "fact" and bool(quote and quote.strip())
 
 
+def _source_has_publication_date(source: object | None) -> bool:
+    if source is None:
+        return False
+    publication_date = getattr(source, "publication_date", None)
+    return bool(isinstance(publication_date, str) and publication_date.strip())
+
+
 def _line_is_report_content(line: str) -> bool:
     stripped = line.strip().lstrip("-* ").strip()
     return bool(stripped) and not stripped.startswith("#") and not stripped.endswith("?")
@@ -476,11 +482,12 @@ def evidence_bound_quality_issues(
             continue
 
         if _contains_any_marker(line_text, _RECENT_CLAIM_MARKERS) and not has_caveat:
-            has_direct_recent_claim = any(
-                _claim_is_direct_evidence(claim, source)
+            direct_recent_sources = [
+                source
                 for claim, source in zip(claims, sources, strict=False)
-            )
-            if not has_direct_recent_claim:
+                if _claim_is_direct_evidence(claim, source)
+            ]
+            if not direct_recent_sources:
                 issues.append(
                     QAIssue(
                         severity="high",
@@ -498,6 +505,23 @@ def evidence_bound_quality_issues(
                     )
                 )
                 continue
+            if not any(_source_has_publication_date(source) for source in direct_recent_sources):
+                issues.append(
+                    QAIssue(
+                        severity="medium",
+                        category="stale_or_unclear_recency",
+                        problem=(
+                            "Recent developments or current strategy are tied to "
+                            "direct evidence, but the cited source has no visible "
+                            f"publication date: {line_text}"
+                        ),
+                        suggested_fix=(
+                            "Cite dated source evidence or state that the timing "
+                            "of the source could not be verified."
+                        ),
+                        affected_section=section.title() if section else None,
+                    )
+                )
 
         if (
             section == "supplier/buyer angle"

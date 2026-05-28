@@ -46,7 +46,8 @@ Full runs can add:
 - `draft_report.md`: synthesized draft report when evidence and pre-QA report
   validation allow a draft to be written.
 - `artifact_review.md`: summary of present/missing artifacts, evidence counts,
-  QA issue counts, publication status, and recommended next action.
+  source-fetch counts, blocking warnings, QA issue counts, publication status,
+  and recommended next action.
 
 ## QA Artifacts
 
@@ -86,7 +87,10 @@ not support high-confidence claims.
 ## Review and Diagnostic Artifacts
 
 - `artifact_review.md`: generated when evidence, report, or QA artifacts are
-  present, and can be refreshed with `arf review-run <run_id>`.
+  present, and can be refreshed with `arf review-run <run_id>`. The CLI also
+  prints the same high-level operator summary: status, publication state,
+  final-report state, QA severity counts, source-fetch counts, blocking
+  warnings, and next action.
 - `evidence_review.md`: written when evidence validation has blocking warnings
   and synthesis/QA do not run.
 - `report_revision.md`: written when deterministic pre-QA report validation

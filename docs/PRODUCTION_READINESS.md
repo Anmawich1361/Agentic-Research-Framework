@@ -2,6 +2,9 @@
 
 Phase 14 adds the baseline artifacts needed for future hosted use without adding a web app or database.
 
+For the V1 CLI release checklist and final validation record, see
+[`RELEASE_READINESS.md`](RELEASE_READINESS.md).
+
 ## CI
 
 GitHub Actions runs `.github/workflows/ci.yml` on pushes, pull requests, and manual dispatch. The workflow installs the package with `make setup` and runs `make check`. It does not run live smoke tests or require API keys.

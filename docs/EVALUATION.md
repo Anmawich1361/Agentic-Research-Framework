@@ -79,6 +79,8 @@ Current expected-blocking fixtures:
 
 - `unsupported_recent_strategy_claims.json`: current/recent strategy claims
   must fail when direct evidence is missing.
+- `unclear_recency_direct_claims.json`: direct evidence without a visible source
+  date must be caveated before a report can treat it as current or recent.
 - `fallback_snippet_evidence_blocked.json`: fallback-only or search-snippet
   evidence must be sanitized out before it can support report claims.
 - `indirect_only_company_evidence_blocked.json`: company reports must block

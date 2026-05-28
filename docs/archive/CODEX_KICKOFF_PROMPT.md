@@ -1,4 +1,7 @@
-# Codex Kickoff Prompt
+# Historical Codex Kickoff Prompt
+
+This archived prompt predates the current V1 implementation and should not be
+treated as current behavior.
 
 Paste this into Codex from the root of the repository.
 

@@ -50,6 +50,9 @@ def test_build_source_search_queries_targets_required_source_types() -> None:
 
     assert queries == [
         "Costco SEC 10-K annual report site:sec.gov supplier meeting",
+        "Costco official company source supplier meeting",
+        "Costco investor relations investor presentation supplier meeting",
+        "Costco earnings release earnings transcript supplier meeting",
         "Costco official company primary source supplier meeting",
         "Costco recent news supplier meeting",
     ]
