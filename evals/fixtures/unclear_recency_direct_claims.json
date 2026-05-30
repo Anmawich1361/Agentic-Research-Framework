@@ -1,0 +1,105 @@
+{
+  "id": "unclear_recency_direct_claims",
+  "name": "Unclear recency requires dated evidence or caveat",
+  "request": "Research Costco before a supplier meeting",
+  "template_name": "meeting_prep.md",
+  "source_map": {
+    "sources": [
+      {
+        "id": "src_costco_news",
+        "title": "Costco company update",
+        "publisher": "Costco Wholesale",
+        "url": "https://example.com/costco-update",
+        "source_type": "primary_company",
+        "bias_risk": "medium",
+        "relevance_rationale": "Primary company update without a visible publication date.",
+        "recommended_uses": ["recent developments", "supplier meeting"]
+      },
+      {
+        "id": "src_costco_vendor",
+        "title": "Costco vendor information",
+        "publisher": "Costco Wholesale",
+        "url": "https://example.com/costco-vendor",
+        "source_type": "primary_company",
+        "bias_risk": "medium",
+        "relevance_rationale": "Primary vendor contact and onboarding context.",
+        "recommended_uses": ["supplier meeting"],
+        "publication_date": "2026-01-15"
+      }
+    ],
+    "scores": [
+      {
+        "source_id": "src_costco_news",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 1,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 3.7,
+        "include": true
+      },
+      {
+        "source_id": "src_costco_vendor",
+        "authority_score": 4,
+        "relevance_score": 5,
+        "recency_score": 5,
+        "coverage_score": 4,
+        "bias_risk": "medium",
+        "final_score": 4.5,
+        "include": true
+      }
+    ],
+    "gaps": ["The current-strategy source lacks a visible publication date."]
+  },
+  "evidence_ledger": {
+    "claims": [
+      {
+        "id": "claim_recent",
+        "claim": "Costco discussed e-commerce growth in company update content.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "Supplier/Buyer Angle",
+        "source_id": "src_costco_news",
+        "source_url": "https://example.com/costco-update",
+        "quote_or_excerpt": "e-commerce growth"
+      },
+      {
+        "id": "claim_vendor",
+        "claim": "Costco publishes vendor contact paths for prospective suppliers.",
+        "claim_type": "fact",
+        "confidence": "medium",
+        "report_section": "What We Know",
+        "source_id": "src_costco_vendor",
+        "source_url": "https://example.com/costco-vendor",
+        "quote_or_excerpt": "Vendor inquiries may be directed to the applicable buying office."
+      }
+    ],
+    "validation_warnings": []
+  },
+  "draft_report": {
+    "title": "Costco Supplier Meeting Prep",
+    "source_ids": ["src_costco_news", "src_costco_vendor"],
+    "claim_ids": ["claim_recent", "claim_vendor"],
+    "markdown": "# Costco Supplier Meeting Prep\n\n## Executive Summary\nCostco supplier prep should use vendor routing and cautiously test source-dated implications. [claim_vendor] [claim_recent]\n\n## Context for Meeting\nCaveat: the available update discusses e-commerce growth, but this fixture omits a visible publication date. [claim_recent]\n\n## What We Know\n- Costco publishes vendor contact paths for prospective suppliers. [claim_vendor]\n\n## What We Do Not Know\n- The publication date for the e-commerce update is not visible in this fixture.\n\n## Supplier/Buyer Angle\nCostco's recent e-commerce growth should shape supplier questions. [claim_recent]\n\n## Questions to Ask\n- Which buying office and category should the supplier prepare for? [claim_vendor]\n\n## Risks and Watchouts\n- Treat date-sensitive supplier implications cautiously until the update date is confirmed.\n\n## Evidence Limitations\n- This fixture has only two claims, and the date-sensitive claim lacks a visible source date.\n\n## Source Appendix\n- Costco company update (src_costco_news) https://example.com/costco-update\n- Costco vendor information (src_costco_vendor) https://example.com/costco-vendor\n"
+  },
+  "expected_qa": {
+    "ready_to_publish": false,
+    "max_high_issues": 0,
+    "min_medium_issues": 1,
+    "required_medium_categories": ["stale_or_unclear_recency"],
+    "max_high_unsupported_claims": 0,
+    "min_claim_count": 2,
+    "min_source_count": 2
+  },
+  "expected_report_sections": [
+    "Executive Summary",
+    "Context for Meeting",
+    "What We Know",
+    "What We Do Not Know",
+    "Supplier/Buyer Angle",
+    "Questions to Ask",
+    "Risks and Watchouts",
+    "Evidence Limitations",
+    "Source Appendix"
+  ]
+}

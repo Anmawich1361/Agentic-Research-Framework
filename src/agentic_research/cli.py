@@ -6,7 +6,7 @@ from typing import Annotated, Any, cast
 
 import typer
 
-from agentic_research.artifact_review import write_artifact_review
+from agentic_research.artifact_review import build_artifact_review, write_artifact_review
 from agentic_research.models import CheckpointAnswer, UserFeedback
 from agentic_research.orchestrator import (
     continue_research,
@@ -312,7 +312,30 @@ def review_run_command(
     if not run_dir.exists() or not run_dir.is_dir():
         raise typer.BadParameter(f"Run directory not found: {run_dir}")
     path = write_artifact_review(run_dir)
+    review = build_artifact_review(run_dir)
     typer.echo(f"artifact_review: {path}")
+    final_published = "yes" if review.final_report_published else "no"
+    typer.echo(f"status: {review.status}")
+    typer.echo(f"publication_state: {review.publication_state}")
+    typer.echo(f"final_report_published: {final_published}")
+    typer.echo(
+        "qa_issues: "
+        f"high={review.qa_high_count} "
+        f"medium={review.qa_medium_count} "
+        f"low={review.qa_low_count}"
+    )
+    typer.echo(
+        "source_fetches: "
+        f"fetched={review.source_fetch_fetched_count} "
+        f"fallback={review.source_fetch_fallback_count} "
+        f"failed={review.source_fetch_failed_count} "
+        f"skipped={review.source_fetch_skipped_count}"
+    )
+    if review.blocking_warnings:
+        typer.echo("blocking_warnings:")
+        for warning in review.blocking_warnings:
+            typer.echo(f"- {warning}")
+    typer.echo(f"next_action: {review.next_recommended_action}")
 
 
 if __name__ == "__main__":

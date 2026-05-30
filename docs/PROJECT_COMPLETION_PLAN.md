@@ -102,7 +102,11 @@ Known remaining risks:
 - Operator review is artifact-rich but still requires manual inspection across
   several files.
 
-## Remaining Milestones
+## V1 Milestones
+
+Status: complete in the current V1 completion branch as of 2026-05-28. See
+`docs/CURRENT_STATUS.md` for the implementation summary and
+`docs/RELEASE_READINESS.md` for the final validation record.
 
 ### 1. Deterministic Eval and Regression Harness
 

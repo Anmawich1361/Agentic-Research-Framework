@@ -308,7 +308,20 @@ def build_source_search_queries(charter: ResearchCharter, plan: ResearchPlan) ->
     context = _query_context(charter, plan)
     queries: list[str] = []
     if charter.target_type == "company":
-        queries.append(f"{charter.target} SEC 10-K annual report site:sec.gov {context} meeting")
+        queries.extend(
+            [
+                f"{charter.target} SEC 10-K annual report site:sec.gov {context} meeting",
+                f"{charter.target} official company source {context} meeting",
+                (
+                    f"{charter.target} investor relations investor presentation "
+                    f"{context} meeting"
+                ),
+                (
+                    f"{charter.target} earnings release earnings transcript "
+                    f"{context} meeting"
+                ),
+            ]
+        )
     for source_type in plan.required_source_types:
         phrase = _query_phrase_for_source_type(source_type)
         queries.append(f"{charter.target} {phrase} {context} meeting")

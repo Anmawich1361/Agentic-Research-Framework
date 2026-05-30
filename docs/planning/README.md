@@ -1,7 +1,9 @@
-# Agentic Research Framework Planning Bundle
+# Historical Agentic Research Framework Planning Bundle
 
-This bundle reviews the current state of the Agentic Research Framework and
-captures the phase-planning material that preceded the current implementation.
+This historical bundle captures phase-planning material that preceded the
+current V1 implementation. Prefer the root `README.md`,
+`docs/CURRENT_STATUS.md`, and `docs/PROJECT_COMPLETION_PLAN.md` for current
+behavior.
 
 Recommended use:
 

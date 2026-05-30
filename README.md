@@ -38,6 +38,7 @@ Core reference docs:
 - [Local development](docs/LOCAL_DEVELOPMENT.md)
 - [Current status](docs/CURRENT_STATUS.md)
 - [Project completion plan](docs/PROJECT_COMPLETION_PLAN.md)
+- [Release readiness](docs/RELEASE_READINESS.md)
 
 ## Setup
 
@@ -222,8 +223,8 @@ Important statuses:
 - Search and source fetch quality can limit evidence depth.
 - Draft quality can still be blocked by content QA even when claim-ID integrity
   is valid.
-- The orchestrator is smaller after helper extraction but still duplicates some
-  live/continue synthesis and QA flow.
+- The orchestrator is smaller after helper extraction, and live/continue
+  synthesis plus QA now share the same post-evidence flow.
 - There is no web app, database, authentication, background job system,
   scheduler, vector database, or document export workflow.
 

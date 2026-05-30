@@ -376,3 +376,70 @@ def test_ingest_source_content_repairs_bad_sec_archive_url_with_resolved_filing(
     assert "Costco operates membership warehouses" in contents[0].text
     assert log.results[0].status == "fetched"
     assert log.results[0].fetched_url == repaired_url
+
+
+def test_ingest_source_content_repairs_company_source_with_bounded_fallback() -> None:
+    source_map = SourceMap(
+        sources=[
+            SourceCandidate(
+                id="costco-investor",
+                title="Costco investor relations",
+                publisher="Costco",
+                url="https://investor.costco.com/stale-page",
+                source_type="investor_material",
+                bias_risk="medium",
+                relevance_rationale="Investor source for company updates.",
+                recommended_uses=["company updates", "earnings"],
+            )
+        ],
+        scores=[
+            SourceScore(
+                source_id="costco-investor",
+                authority_score=4,
+                relevance_score=5,
+                recency_score=4,
+                coverage_score=4,
+                bias_risk="medium",
+                final_score=4.2,
+                include=True,
+            )
+        ],
+        gaps=[],
+    )
+    repaired_url = "https://investor.costco.com/news-releases"
+    calls: list[str] = []
+
+    def fake_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
+        calls.append(url)
+        if url == source_map.sources[0].url:
+            return SourceHttpResponse(
+                url=url,
+                status_code=404,
+                headers={"content-type": "text/html"},
+                text="<html><body>not found</body></html>",
+            )
+        return SourceHttpResponse(
+            url=url,
+            status_code=200,
+            headers={"content-type": "text/html"},
+            text=(
+                "<html><head><title>Costco news releases</title></head>"
+                "<body><main><p>Costco reports quarterly net sales and company "
+                "updates through its investor news releases.</p></main></body></html>"
+            ),
+        )
+
+    contents, log = ingest_source_content(
+        source_map,
+        fetcher=fake_fetcher,
+        company_source_resolver=lambda source, timeout_seconds: [repaired_url],
+    )
+
+    assert calls == [source_map.sources[0].url, repaired_url]
+    assert len(contents) == 1
+    assert contents[0].source_id == "costco-investor"
+    assert contents[0].url == repaired_url
+    assert "quarterly net sales" in contents[0].text
+    assert log.results[0].status == "fetched"
+    assert log.results[0].url == source_map.sources[0].url
+    assert log.results[0].fetched_url == repaired_url

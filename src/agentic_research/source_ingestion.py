@@ -31,6 +31,7 @@ class SourceHttpResponse(StrictModel):
 SourceFetcher = Callable[[str, float], SourceHttpResponse]
 PDFTextExtractor = Callable[[bytes], str]
 SECArchiveResolver = Callable[[str, float], str | None]
+CompanySourceResolver = Callable[[SourceCandidate, float], list[str]]
 
 DEFAULT_FETCH_TIMEOUT_SECONDS = 10.0
 DEFAULT_HIGH_SCORE_FLOOR = 4.0
@@ -161,12 +162,132 @@ def resolve_latest_sec_10k_archive_url(url: str, timeout_seconds: float) -> str 
     return None
 
 
+def _base_url_for_source(source: SourceCandidate) -> str | None:
+    parsed = urlparse(source.url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _dedupe_fallback_urls(source: SourceCandidate, urls: list[str]) -> list[str]:
+    seen = {source.url.rstrip("/")}
+    deduped: list[str] = []
+    for url in urls:
+        normalized = url.rstrip("/")
+        if not _is_valid_http_url(url) or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(url)
+    return deduped
+
+
+def resolve_company_source_fallback_urls(
+    source: SourceCandidate,
+    timeout_seconds: float,
+) -> list[str]:
+    del timeout_seconds
+    base_url = _base_url_for_source(source)
+    if base_url is None:
+        return []
+
+    source_text = " ".join(
+        [
+            source.source_type,
+            source.title,
+            source.relevance_rationale,
+            " ".join(source.recommended_uses),
+        ]
+    ).lower()
+    candidates: list[str] = []
+    if source.source_type == "investor_material":
+        candidates.extend(
+            [
+                f"{base_url}/investor-relations",
+                f"{base_url}/investors",
+                f"{base_url}/news-releases",
+            ]
+        )
+    elif source.source_type == "earnings_transcript":
+        candidates.extend(
+            [
+                f"{base_url}/investor-relations/events-and-presentations",
+                f"{base_url}/investor-relations/news-releases",
+                f"{base_url}/investors/events",
+            ]
+        )
+    elif source.source_type == "primary_company":
+        if "supplier" in source_text or "vendor" in source_text:
+            candidates.extend(
+                [
+                    f"{base_url}/suppliers",
+                    f"{base_url}/suppliers.html",
+                    f"{base_url}/vendor",
+                ]
+            )
+        else:
+            candidates.append(base_url)
+    elif source.source_type == "corporate_filing" and not _is_sec_filing_source(source):
+        candidates.extend(
+            [
+                f"{base_url}/investor-relations/sec-filings",
+                f"{base_url}/investors/sec-filings",
+            ]
+        )
+    return _dedupe_fallback_urls(source, candidates)[:3]
+
+
 def _fetch_preference_rank(source: SourceCandidate) -> int:
     if _is_sec_filing_source(source):
         return 0
     if source.source_type == "corporate_filing":
         return 1
     return 2
+
+
+def _should_attempt_company_source_fallback(
+    source: SourceCandidate,
+    result: SourceFetchResult,
+) -> bool:
+    if _is_sec_filing_source(source) or result.status == "fetched":
+        return False
+    if source.source_type not in {
+        "corporate_filing",
+        "earnings_transcript",
+        "investor_material",
+        "primary_company",
+    }:
+        return False
+    return result.failure_reason in {
+        "bot_access_block",
+        "fetch_error",
+        "http_403",
+        "http_error",
+        "no_readable_text",
+        "timeout",
+    }
+
+
+def _try_company_source_fallbacks(
+    *,
+    source: SourceCandidate,
+    fetch: SourceFetcher,
+    pdf_text_extractor: PDFTextExtractor,
+    company_source_resolver: CompanySourceResolver,
+    timeout_seconds: float,
+) -> tuple[SourceContent | None, SourceFetchResult | None]:
+    for fallback_url in company_source_resolver(source, timeout_seconds):
+        try:
+            response = fetch(fallback_url, timeout_seconds)
+            content, result = _content_and_result(
+                source=source,
+                response=response,
+                pdf_text_extractor=pdf_text_extractor,
+            )
+        except Exception:
+            continue
+        if content is not None:
+            return content, result
+    return None, None
 
 
 def _prefer_accessible_official_sources(
@@ -448,6 +569,7 @@ def ingest_source_content(
     fetcher: SourceFetcher | None = None,
     pdf_text_extractor: PDFTextExtractor = extract_pdf_text,
     sec_filing_resolver: SECArchiveResolver = resolve_latest_sec_10k_archive_url,
+    company_source_resolver: CompanySourceResolver = resolve_company_source_fallback_urls,
     timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS,
     high_score_floor: float = DEFAULT_HIGH_SCORE_FLOOR,
 ) -> tuple[list[SourceContent], SourceFetchLog]:
@@ -480,6 +602,20 @@ def ingest_source_content(
                 response=response,
                 pdf_text_extractor=pdf_text_extractor,
             )
+            if content is None and _should_attempt_company_source_fallback(
+                source,
+                result,
+            ):
+                fallback_content, fallback_result = _try_company_source_fallbacks(
+                    source=source,
+                    fetch=fetch,
+                    pdf_text_extractor=pdf_text_extractor,
+                    company_source_resolver=company_source_resolver,
+                    timeout_seconds=timeout_seconds,
+                )
+                if fallback_content is not None and fallback_result is not None:
+                    content = fallback_content
+                    result = fallback_result
         except Exception as exc:
             content = None
             result = SourceFetchResult(
@@ -497,6 +633,7 @@ def ingest_source_content(
 
 __all__ = [
     "DEFAULT_FETCH_TIMEOUT_SECONDS",
+    "CompanySourceResolver",
     "PDFTextExtractor",
     "SECArchiveResolver",
     "SourceFetcher",
@@ -504,6 +641,7 @@ __all__ = [
     "extract_pdf_text",
     "ingest_source_content",
     "parse_html_to_text",
+    "resolve_company_source_fallback_urls",
     "resolve_latest_sec_10k_archive_url",
     "sources_for_ingestion",
 ]

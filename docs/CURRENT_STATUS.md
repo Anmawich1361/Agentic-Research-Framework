@@ -2,6 +2,43 @@
 
 This note records successive stabilization points for the CLI-first framework.
 
+## 2026-05-28 V1 Completion Pass
+
+The V1 roadmap milestones in `docs/PROJECT_COMPLETION_PLAN.md` are complete in
+the current branch:
+
+- The deterministic eval layer remains the first diagnostic layer and now
+  includes 10 quality fixtures, including an unclear-recency fixture that
+  requires dated evidence or an explicit caveat.
+- Live `run_research` and `continue_research` share the post-evidence
+  synthesis, traceability validation, QA, conservative revision, status, and
+  publication decision path.
+- Company source discovery now adds first-class official company, investor
+  relations, earnings release/transcript, and SEC filing queries before
+  required-source-type queries.
+- Source ingestion can use bounded SEC and company-source fallback resolvers
+  while keeping failed, skipped, and fallback-only fetches explicit in
+  `source_fetch_log.json` and out of factual synthesis.
+- Report validation flags uncaveated current/recent claims when their direct
+  evidence source lacks a visible publication date, without weakening
+  high-severity evidence and publication gates.
+- `arf review-run <run_id>` still writes `artifact_review.md` and now prints a
+  compact operator summary with status, publication state, QA severity counts,
+  source-fetch counts, blocking warnings, and next action.
+- `docs/RELEASE_READINESS.md` records the V1 checklist, validation commands,
+  and accepted limitations.
+
+Final validation for this pass:
+
+- `make doctor`: passed.
+- `make check`: passed with 156 tests; Ruff passed; mypy passed.
+- `make eval`: passed with 10/10 fixtures.
+- `make eval-regression`: passed with 5/5 workflow scenarios.
+- `make smoke-mock`: passed and wrote
+  `runs/run_20260528T182848Z_a2921029` with `metadata.status =
+  checkpoint_ready`.
+- `git diff --check`: passed.
+
 ## 2026-05-27 Project Completion Roadmap
 
 `docs/PROJECT_COMPLETION_PLAN.md` is now the authoritative V1 completion

@@ -69,6 +69,29 @@ def test_build_artifact_review_summarizes_run_quality(tmp_path: Path) -> None:
             ],
         },
     )
+    _write_json(
+        run_dir / "source_fetch_log.json",
+        {
+            "results": [
+                {
+                    "source_id": "src_costco",
+                    "url": "https://example.com/costco",
+                    "status": "fetched",
+                    "text_char_count": 100,
+                    "chunk_count": 1,
+                },
+                {
+                    "source_id": "src_blocked",
+                    "url": "https://example.com/blocked",
+                    "status": "failed",
+                    "failure_reason": "http_403",
+                    "error": "HTTP 403",
+                    "text_char_count": 0,
+                    "chunk_count": 0,
+                },
+            ]
+        },
+    )
     (run_dir / "draft_report.md").write_text("# Draft", encoding="utf-8")
 
     review = build_artifact_review(run_dir)
@@ -79,8 +102,15 @@ def test_build_artifact_review_summarizes_run_quality(tmp_path: Path) -> None:
     assert review.unique_claim_id_count == 2
     assert review.near_duplicate_count == 1
     assert review.qa_high_count == 1
+    assert review.source_fetch_fetched_count == 1
+    assert review.source_fetch_failed_count == 1
+    assert review.publication_state == "qa_blocked"
+    assert any("QA blocked publication" in warning for warning in review.blocking_warnings)
+    assert any("1 failed source fetch" in warning for warning in review.blocking_warnings)
     assert review.final_report_published is False
     assert "Final report published: no" in markdown
+    assert "Publication state: qa_blocked" in markdown
+    assert "Source fetches: 1 fetched, 0 fallback, 1 failed, 0 skipped" in markdown
     assert "Fix high-severity QA blockers before publishing the final report." in markdown
 
 

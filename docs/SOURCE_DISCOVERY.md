@@ -33,3 +33,23 @@ A source map should include:
 - recommended use
 - gaps
 - rejected or downgraded sources when relevant
+
+## Company-source priority
+
+For company targets, source discovery starts with bounded primary-source
+queries before broad web coverage:
+
+- direct SEC 10-K filing pages
+- official company pages
+- investor relations and investor presentations
+- earnings releases and earnings transcripts
+
+Per-query search failures are non-fatal. They should be preserved in
+`source_map.gaps` instead of aborting the checkpoint.
+
+## Retrieval fallback boundary
+
+Source ingestion may repair stale SEC archive URLs and try a small set of
+official company fallback URLs. It should not become a complex SEC parser, and
+failed, skipped, or fallback-only source fetches must stay visible in
+`source_fetch_log.json`.
