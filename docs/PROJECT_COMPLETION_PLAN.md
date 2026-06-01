@@ -3,9 +3,9 @@
 This is the authoritative roadmap for finishing Agentic Research Framework as a
 V1 CLI-first agentic research system. Keep `README.md` as the product overview,
 keep `docs/CURRENT_STATUS.md` as the latest state note, and use this document to
-scope future Codex goals and pull requests.
+scope future Codex goals, long-running Codex sessions, and pull requests.
 
-Last updated: 2026-05-27.
+Last updated: 2026-06-01.
 
 ## V1 Completion Definition
 
@@ -257,9 +257,29 @@ After a live run, inspect `runs/<run_id>/metadata.json`, `source_fetch_log.json`
 `artifact_review.md`, and `report.md` as applicable before claiming the run is
 publishable.
 
-## Rules for Future Codex PRs
+## Long-Running Codex Goals and PR Scope
 
-- Ship one milestone or one coherent slice of a milestone per PR.
+Long-running Codex goals are allowed when the user explicitly asks for a goal,
+the next unfinished milestone, a validation-to-green loop, or end-to-end
+completion. Keep working across implementation, debugging, documentation, and
+verification passes until the requested outcome is complete or genuinely
+blocked.
+
+Long-running work does not require one pull request. Keep each PR or commit
+coherent and reviewable, but do not treat "one milestone per PR" or "one
+coherent slice per PR" as a reason to stop the Codex session before the user's
+goal is handled. If a long goal naturally produces multiple PR-sized slices,
+finish the current slice cleanly, report it, and continue to the next slice when
+that remains inside the stated goal.
+
+Product research checkpoints are part of ARF run behavior. They are not Codex
+development checkpoints unless the user asked for interactive approval.
+
+## Rules for Future Codex Work and PRs
+
+- Keep each PR to one milestone or one coherent slice of a milestone by default.
+- Continue a long-running Codex goal across multiple coherent slices when the
+  user explicitly asked for that breadth.
 - Preserve `--mock` mode.
 - Do not make live API calls in tests.
 - Preserve artifact filenames.
@@ -272,9 +292,15 @@ publishable.
 
 ## Stop Rules
 
-- Do not attempt all milestones in one PR.
-- Do not merge the PR.
-- Stop and document any blocker if validation fails.
-- Stop and document any blocker if the scope becomes unclear.
+- Do not merge a PR unless the user explicitly asks.
+- Do not stop only because the work spans multiple files, multiple validation
+  attempts, or more than one coherent PR-sized slice.
+- If validation fails, debug and rerun within the stated scope. Stop only when
+  the failure is caused by missing credentials, unavailable services, a broken
+  local environment that cannot be repaired safely, or a scope conflict that
+  local repo context cannot resolve.
+- If scope becomes unclear, inspect the roadmap, current status, branch state,
+  and user prompt first. Stop for clarification only when that evidence is still
+  insufficient.
 - Stop rather than weakening safety gates to make a report publish.
 - Stop rather than adding a V1 non-goal to work around a CLI or artifact issue.

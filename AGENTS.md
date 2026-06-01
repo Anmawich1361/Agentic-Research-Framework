@@ -30,6 +30,32 @@ The system should:
 - Use type hints where practical.
 - Avoid over-engineering early phases.
 
+## Long-running Codex goals
+
+Long-running Codex work is allowed when the user explicitly starts a goal,
+asks to finish a roadmap milestone, asks to keep working until validation
+passes, or otherwise grants a broad execution scope.
+
+- Treat an explicit goal as permission to continue across multiple
+  implementation, debugging, documentation, and validation loops until the
+  stated outcome is complete or genuinely blocked.
+- Do not stop merely because the task spans many files, takes a long time, or
+  requires several verification passes.
+- "Prefer small, reviewable changes" means keep each change coherent and easy
+  to inspect; it is not a reason to stop before the requested goal is complete.
+- Product checkpoint rules apply to ARF research runs, not to Codex's own
+  development workflow. If the user asks Codex to implement or validate work,
+  continue without asking for intermediate approval unless scope, safety,
+  credentials, or destructive operations require it.
+- For long goals, leave clear progress notes in the conversation and preserve
+  durable evidence in repo artifacts or docs when the task calls for it.
+- Stop only for a true blocker: missing credentials, unavailable services,
+  unclear or conflicting scope that cannot be resolved from repo context,
+  approval needed for destructive or privileged operations, or exhausted user
+  budget.
+- Do not add product background jobs, scheduled automations, databases, or other
+  excluded features just to support a long Codex session.
+
 ## Setup commands
 
 ```bash

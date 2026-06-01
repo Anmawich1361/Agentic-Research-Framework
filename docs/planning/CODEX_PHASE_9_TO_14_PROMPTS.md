@@ -1,6 +1,9 @@
 # Codex Phase Prompts
 
-Use these one phase at a time. Do not paste all phases at once.
+Use these as scoped prompt templates. For isolated work, run one phase prompt.
+For an explicit long-running Codex goal, it is acceptable to combine adjacent
+phases or roadmap slices and keep working through implementation, debugging, and
+validation until the stated goal is complete or genuinely blocked.
 
 ---
 

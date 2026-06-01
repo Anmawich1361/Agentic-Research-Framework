@@ -4,6 +4,11 @@
 use `metadata.status` to choose the next action and then read the artifacts that
 match that status.
 
+For a compact operator view, run `arf show <run_id>`. To refresh and print the
+artifact summary, run `arf review-run <run_id>`. These commands summarize final
+publication state, QA severity counts, source-fetch counts, missing artifacts,
+blockers, and next action without replacing the status contract below.
+
 ## `checkpoint_ready`
 
 Meaning: Checkpoint artifacts were written and the run is waiting for user

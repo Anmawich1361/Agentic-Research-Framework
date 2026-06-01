@@ -10,8 +10,10 @@ Recommended use:
 1. Read [`PROJECT_REVIEW_CURRENT_STATE.md`](PROJECT_REVIEW_CURRENT_STATE.md).
 2. Use [`ROADMAP_PHASE_9_TO_14.md`](ROADMAP_PHASE_9_TO_14.md) as the historical
    build plan.
-3. Give Codex one prompt at a time from
-   [`CODEX_PHASE_9_TO_14_PROMPTS.md`](CODEX_PHASE_9_TO_14_PROMPTS.md).
+3. Use [`CODEX_PHASE_9_TO_14_PROMPTS.md`](CODEX_PHASE_9_TO_14_PROMPTS.md) as a
+   prompt archive. For isolated work, choose a narrow phase prompt. For explicit
+   long-running goals, bundle several prompts or roadmap slices and keep Codex
+   working through implementation, debugging, and validation.
 4. Use [`QUALITY_GATES_AND_EVALS.md`](QUALITY_GATES_AND_EVALS.md) as the
    acceptance checklist.
 5. Use
@@ -27,3 +29,6 @@ NEXT_CODEX_PROMPT_PHASE_9.md
 
 The root README is now the current project entrypoint. Keep future planning
 material in this directory unless it belongs in durable product documentation.
+
+For long-running Codex sessions, use
+[`../CODEX_LONGRUN_TASKS.md`](../CODEX_LONGRUN_TASKS.md) as the durable guidance.
