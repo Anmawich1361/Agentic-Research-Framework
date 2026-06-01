@@ -229,6 +229,114 @@ def test_cli_run_subcommand_accepts_qa_mode(monkeypatch, tmp_path) -> None:
     assert "run_qa" in result.stdout
 
 
+def test_cli_wizard_defaults_to_checkpoint_first(monkeypatch, tmp_path) -> None:
+    captured = {}
+    checkpoint_path = tmp_path / "runs" / "run_wizard_checkpoint" / "checkpoint.md"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text("# checkpoint", encoding="utf-8")
+    result_obj = SimpleNamespace(
+        metadata=RunMetadata(
+            run_id="run_wizard_checkpoint",
+            created_at="2026-05-18T00:00:00+00:00",
+            request="Research Nvidia before an investor meeting",
+            status="checkpoint_ready",
+            mode="standard",
+            lens="investment",
+            mock=True,
+        ),
+        checkpoint_path=checkpoint_path,
+        run_dir=checkpoint_path.parent,
+        draft_report_path=None,
+        report_path=None,
+        report=None,
+    )
+
+    def fake_run_research(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return result_obj
+
+    monkeypatch.setattr(cli, "run_research", fake_run_research)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["wizard", "--mock", "--model", "gpt-test"],
+        input="Nvidia\nan investor meeting\n1\n2\n\n",
+    )
+
+    assert result.exit_code == 0
+    assert captured["args"] == ("Research Nvidia before an investor meeting",)
+    assert captured["kwargs"]["checkpoint_only"] is True
+    assert captured["kwargs"]["full"] is False
+    assert captured["kwargs"]["qa"] is False
+    assert captured["kwargs"]["mock"] is True
+    assert captured["kwargs"]["model"] == "gpt-test"
+    assert captured["kwargs"]["lens"] == "investment"
+    assert captured["kwargs"]["mode"] == "standard"
+    assert "run_id: run_wizard_checkpoint" in result.stdout
+    assert "status: checkpoint_ready" in result.stdout
+    assert "checkpoint:" in result.stdout
+    assert "next_show: .venv/bin/arf show run_wizard_checkpoint" in result.stdout
+    assert "next_review: .venv/bin/arf review-run run_wizard_checkpoint" in result.stdout
+    assert "next_approve: .venv/bin/arf approve-sources run_wizard_checkpoint" in result.stdout
+    assert "next_continue: .venv/bin/arf continue run_wizard_checkpoint --qa" in result.stdout
+
+
+def test_cli_wizard_can_run_full_qa_with_custom_request(monkeypatch, tmp_path) -> None:
+    captured = {}
+    checkpoint_path = tmp_path / "runs" / "run_wizard_full" / "checkpoint.md"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text("# checkpoint", encoding="utf-8")
+    report_path = checkpoint_path.parent / "report.md"
+    result_obj = SimpleNamespace(
+        metadata=RunMetadata(
+            run_id="run_wizard_full",
+            created_at="2026-05-18T00:00:00+00:00",
+            request="Research Costco before a supplier meeting",
+            status="report_ready",
+            mode="brief",
+            lens="sales",
+            mock=False,
+        ),
+        checkpoint_path=checkpoint_path,
+        run_dir=checkpoint_path.parent,
+        draft_report_path=checkpoint_path.parent / "draft_report.md",
+        report_path=report_path,
+        report=object(),
+    )
+
+    def fake_run_research(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return result_obj
+
+    monkeypatch.setattr(cli, "run_research", fake_run_research)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["wizard"],
+        input="Research Costco before a supplier meeting\n2\n1\n2\n",
+    )
+
+    assert result.exit_code == 0
+    assert captured["args"] == ("Research Costco before a supplier meeting",)
+    assert captured["kwargs"]["checkpoint_only"] is False
+    assert captured["kwargs"]["full"] is True
+    assert captured["kwargs"]["qa"] is True
+    assert captured["kwargs"]["mock"] is False
+    assert captured["kwargs"]["model"] is None
+    assert captured["kwargs"]["lens"] == "sales"
+    assert captured["kwargs"]["mode"] == "brief"
+    assert "run_id: run_wizard_full" in result.stdout
+    assert "status: report_ready" in result.stdout
+    assert "report:" in result.stdout
+    assert "next_show: .venv/bin/arf show run_wizard_full" in result.stdout
+    assert "next_review: .venv/bin/arf review-run run_wizard_full" in result.stdout
+    assert "next_approve:" not in result.stdout
+
+
 def test_cli_review_run_command_writes_artifact_review(tmp_path) -> None:
     run_dir = tmp_path / "run_cli_review"
     run_dir.mkdir()

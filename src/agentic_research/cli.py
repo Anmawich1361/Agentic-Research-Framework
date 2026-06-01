@@ -19,6 +19,9 @@ from agentic_research.settings import get_artifact_dir
 
 
 app = typer.Typer(help="Agentic Research Framework CLI.")
+LENS_CHOICES = ["investment", "sales", "strategy", "industry", "general"]
+MODE_CHOICES = ["brief", "standard", "deep_dive"]
+RUN_PATH_CHOICES = ["checkpoint first", "full QA report"]
 
 
 @app.callback()
@@ -65,6 +68,90 @@ def run_command(
 
     typer.echo(f"run_id: {result.metadata.run_id}")
     typer.echo(f"checkpoint: {result.checkpoint_path}")
+
+
+def _prompt_choice(prompt: str, choices: list[str], *, default: str) -> str:
+    if default not in choices:
+        raise ValueError(f"Default choice is not valid: {default}")
+    for index, choice in enumerate(choices, start=1):
+        typer.echo(f"{index}. {choice}")
+    default_index = choices.index(default) + 1
+    raw_choice = typer.prompt(prompt, default=str(default_index)).strip()
+    if raw_choice in choices:
+        return raw_choice
+    try:
+        selected_index = int(raw_choice)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{prompt} must be a number from 1 to {len(choices)} or one of: "
+            f"{', '.join(choices)}"
+        ) from exc
+    if not 1 <= selected_index <= len(choices):
+        raise typer.BadParameter(f"{prompt} must be a number from 1 to {len(choices)}")
+    return choices[selected_index - 1]
+
+
+def _looks_like_full_research_request(value: str) -> bool:
+    return value.strip().lower().startswith("research ")
+
+
+def _wizard_request() -> str:
+    target_or_request = typer.prompt("Company/topic or full request").strip()
+    if not target_or_request:
+        raise typer.BadParameter("Company/topic or full request cannot be empty.")
+    if _looks_like_full_research_request(target_or_request):
+        return target_or_request
+    context = typer.prompt("Preparation context", default="a meeting").strip()
+    if not context:
+        raise typer.BadParameter("Preparation context cannot be empty.")
+    return f"Research {target_or_request} before {context}"
+
+
+def _print_wizard_result(result: Any, *, checkpoint_first: bool) -> None:
+    run_id = result.metadata.run_id
+    typer.echo(f"run_id: {run_id}")
+    typer.echo(f"status: {result.metadata.status}")
+    typer.echo(f"checkpoint: {result.checkpoint_path}")
+    if getattr(result, "draft_report_path", None) is not None:
+        typer.echo(f"draft_report: {result.draft_report_path}")
+    if getattr(result, "report_path", None) is not None:
+        typer.echo(f"report: {result.report_path}")
+    typer.echo(f"run_dir: {result.run_dir}")
+    typer.echo(f"next_show: .venv/bin/arf show {run_id}")
+    typer.echo(f"next_review: .venv/bin/arf review-run {run_id}")
+    if checkpoint_first:
+        typer.echo(f"next_approve: .venv/bin/arf approve-sources {run_id} <source_id...>")
+        typer.echo(f"next_continue: .venv/bin/arf continue {run_id} --qa")
+
+
+@app.command("wizard")
+def wizard_command(
+    mock: Annotated[bool, typer.Option("--mock", help="Run without live API calls.")] = False,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Optional OpenAI model override for live agent mode."),
+    ] = None,
+) -> None:
+    """Interactively start a new research run."""
+    request = _wizard_request()
+    lens = _prompt_choice("Lens", LENS_CHOICES, default="investment")
+    mode = _prompt_choice("Mode", MODE_CHOICES, default="standard")
+    run_path = _prompt_choice("Run path", RUN_PATH_CHOICES, default="checkpoint first")
+    checkpoint_first = run_path == "checkpoint first"
+    try:
+        result = run_research(
+            request,
+            mode=mode,
+            lens=lens,
+            checkpoint_only=checkpoint_first,
+            full=not checkpoint_first,
+            qa=not checkpoint_first,
+            mock=mock,
+            model=model,
+        )
+    except (FileNotFoundError, NotImplementedError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _print_wizard_result(result, checkpoint_first=checkpoint_first)
 
 
 def _resolve_run_dir(run_id_or_path: str) -> Path:
