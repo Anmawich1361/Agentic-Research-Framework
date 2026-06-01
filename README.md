@@ -38,6 +38,8 @@ Core reference docs:
 - [Local development](docs/LOCAL_DEVELOPMENT.md)
 - [Current status](docs/CURRENT_STATUS.md)
 - [Project completion plan](docs/PROJECT_COMPLETION_PLAN.md)
+- [Evaluation harness](docs/EVALUATION.md)
+- [Long-running Codex tasks](docs/CODEX_LONGRUN_TASKS.md)
 - [Release readiness](docs/RELEASE_READINESS.md)
 
 ## Setup

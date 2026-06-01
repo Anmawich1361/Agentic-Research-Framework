@@ -2,6 +2,24 @@
 
 This note records successive stabilization points for the CLI-first framework.
 
+## 2026-06-01 Long-Running Goal Documentation Pass
+
+The V1 roadmap milestones remain complete. This pass fixed the repo guidance
+that previously implied Codex should stop at one milestone or one PR-sized
+slice even when the user explicitly starts a broader goal.
+
+Validation for this pass:
+
+- `make reset-env`: rebuilt a damaged local `.venv`.
+- `make doctor`: passed.
+- `make check`: passed with 156 tests; Ruff passed; mypy passed.
+- `make eval`: passed with 10/10 fixtures.
+- `make eval-regression`: passed with 5/5 workflow scenarios.
+- `make smoke-mock`: passed and wrote
+  `runs/run_20260601T142504Z_0d3e5333` with `metadata.status =
+  checkpoint_ready`.
+- `git diff --check`: passed.
+
 ## 2026-05-28 V1 Completion Pass
 
 The V1 roadmap milestones in `docs/PROJECT_COMPLETION_PLAN.md` are complete in

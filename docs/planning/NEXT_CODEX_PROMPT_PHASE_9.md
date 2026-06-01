@@ -1,6 +1,7 @@
 # Next Codex Prompt — Phase 9
 
-Paste this into Codex after syncing `main`.
+This archived single-phase prompt can be pasted into Codex after syncing `main`,
+or used as one slice inside an explicit long-running Codex goal.
 
 ```text
 Implement Phase 9: evidence and artifact quality hardening.

@@ -1,6 +1,6 @@
 # V1 Release Readiness
 
-Status: V1 validation passed in this branch on 2026-05-28.
+Status: V1 validation passed in this branch on 2026-06-01.
 
 ## Checklist
 
@@ -24,11 +24,11 @@ make doctor: passed
 make check: passed, 156 tests passed; Ruff passed; mypy passed
 make eval: passed, 10/10 fixtures
 make eval-regression: passed, 5/5 scenarios
-make smoke-mock: passed, run_20260528T182848Z_a2921029
+make smoke-mock: passed, run_20260601T142504Z_0d3e5333
 git diff --check: passed
 ```
 
-Mock smoke artifact inspection for `run_20260528T182848Z_a2921029`:
+Mock smoke artifact inspection for `run_20260601T142504Z_0d3e5333`:
 
 - `metadata.status`: `checkpoint_ready`
 - `metadata.run_type`: `checkpoint`
