@@ -74,6 +74,17 @@ def test_reset_env_clears_hidden_flags_after_installing_editable_package() -> No
     )
 
 
+def test_reset_env_creates_direct_editable_import_fallback() -> None:
+    script = (PROJECT_ROOT / "scripts" / "reset_env.sh").read_text(encoding="utf-8")
+
+    assert "ensure_editable_import_fallback" in script
+    assert "src/agentic_research" in script
+    assert "ln -sfn" in script
+    assert script.index(".venv/bin/python -m pip install -e") < script.rindex(
+        "ensure_editable_import_fallback"
+    )
+
+
 def test_doctor_env_checks_pytest_availability() -> None:
     script = (PROJECT_ROOT / "scripts" / "doctor_env.py").read_text(encoding="utf-8")
 
@@ -91,6 +102,17 @@ def test_doctor_env_repairs_hidden_venv_flags_before_import_check() -> None:
     assert "chflags" in script
     assert "site.addsitedir" in script
     assert script.index("_repair_hidden_venv_flags()") < script.index("_verify_import()")
+
+
+def test_doctor_env_creates_direct_editable_import_fallback_before_import_check() -> None:
+    script = (PROJECT_ROOT / "scripts" / "doctor_env.py").read_text(encoding="utf-8")
+
+    assert "_ensure_editable_import_fallback()" in script
+    assert "symlink_to" in script
+    assert "EXPECTED_PACKAGE_DIR" in script
+    assert script.index("_ensure_editable_import_fallback()") < script.index(
+        "_verify_import()"
+    )
 
 
 def test_doctor_env_script_has_cli_help() -> None:
