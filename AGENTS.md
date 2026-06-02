@@ -15,6 +15,45 @@ The system should:
 7. Generate a cited markdown report.
 8. Run QA/red-team checks before final output.
 
+## Repository authority
+
+- `docs/PROJECT_COMPLETION_PLAN.md` is the roadmap and milestone scope authority.
+- `README.md` should stay a concise project overview and command entrypoint.
+- `docs/CURRENT_STATUS.md` should stay the latest implementation/status ledger.
+- `docs/CODEX_LONGRUN_TASKS.md` holds detailed long-running Codex guidance.
+- If those docs appear to conflict, inspect the current branch, current docs, and
+  the user's prompt before changing scope. Ask only when local evidence cannot
+  resolve the conflict.
+
+## Start-of-session preflight
+
+Before planning broad work, editing files, or diagnosing failures, ground the
+session in the current repo state:
+
+```bash
+pwd
+git status -sb
+git branch --show-current
+make doctor
+```
+
+Also check branch/upstream reality before PR or milestone work:
+
+```bash
+git rev-parse --abbrev-ref --symbolic-full-name @{u}
+git status -sb
+```
+
+When publishing, first check whether a PR already exists for the head branch:
+
+```bash
+gh pr list --head "$(git branch --show-current)"
+```
+
+If a PR looks incomplete or conflicted, verify whether the branch was created
+from a stale local `main` before redoing implementation. Rebase or compare
+against current `origin/main` when branch ancestry is the real issue.
+
 ## Coding rules for Codex
 
 - Do not implement the whole system in one giant file.
@@ -29,6 +68,10 @@ The system should:
 - Do not silently remove files or prompts unless explicitly asked.
 - Use type hints where practical.
 - Avoid over-engineering early phases.
+- Keep changes CLI-first, filesystem-first, and artifact-first unless the user
+  explicitly changes product scope.
+- Preserve evidence validation, report traceability, fallback-only evidence
+  blocking, QA blocking behavior, and `report.md` publication gates.
 
 ## Long-running Codex goals
 
@@ -56,21 +99,99 @@ passes, or otherwise grants a broad execution scope.
 - Do not add product background jobs, scheduled automations, databases, or other
   excluded features just to support a long Codex session.
 
-## Setup commands
+## Setup and environment repair
+
+Use the Makefile targets instead of manually setting `PYTHONPATH`:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+make reset-env
+make doctor
+make check
 ```
 
-## Test commands
+After switching branches, this is usually enough:
 
 ```bash
-pytest
-ruff check .
-mypy src
+make setup
+make doctor
 ```
+
+Treat these symptoms as likely editable-install or `.venv` damage before
+debugging application code:
+
+- `ModuleNotFoundError: No module named 'agentic_research'`
+- broken or missing `.venv/bin/arf`
+- pytest collection failures caused by missing installed packages
+- repeated missing-package errors after a targeted reinstall
+
+Run `make doctor` first. If the environment is broadly damaged, use
+`make reset-env` rather than piecemeal package repairs. Do not weaken tests,
+imports, or CLI behavior to work around a broken local environment.
+
+## Validation commands
+
+For docs-only changes, run:
+
+```bash
+make doctor
+./.venv/bin/python -m pytest tests/test_docs_contract.py
+git diff --check
+```
+
+For milestone, workflow, or code changes, run:
+
+```bash
+make doctor
+make check
+make eval
+make eval-regression
+make smoke-mock
+git diff --check
+```
+
+Use focused tests during development, but do not claim a milestone/code change
+is complete until the relevant broader bundle has run and the results have been
+reported command by command.
+
+## PR and staging workflow
+
+When the user says "make a PR", "open a PR", "publish this", or similar, treat
+it as the full publish flow unless they explicitly ask for something narrower:
+
+1. Check `git status -sb` and keep staging narrow.
+2. Stage only intended source, test, prompt, config, schema, template, or doc
+   files.
+3. Commit with a concise message.
+4. Push the current branch.
+5. Open a draft PR against `main`.
+6. Verify the PR with `gh pr view` or `gh pr list --head`.
+
+Do not stage `.env`, `.venv`, caches, `runs/`, generated run artifacts,
+generated demo exports, duplicate scratch docs such as `docs/* 2.md`, or
+unrelated untracked files unless the user explicitly asks for them.
+
+Do not merge a PR unless the user explicitly asks. If the GitHub connector fails
+but local `gh` auth is valid, fall back to `gh pr create --draft` and verify the
+created PR.
+
+## ARF run success semantics
+
+When answering whether ARF can research a company or whether a run "worked",
+describe the outcome using `metadata.json.status` and the run artifacts rather
+than unconditional success language.
+
+- `report.md` means a final report was published after the configured gates.
+- `artifact_review.md` summarizes missing/present artifacts, warning counts, and
+  next actions.
+- `evidence_review.md` means evidence validation blocked synthesis or
+  publication.
+- `qa_review.json` records QA findings when QA ran.
+- `report_revision.md` means deterministic report validation found traceability
+  or structure issues that need revision.
+
+If live source access, evidence quality, or QA gates stop publication, report the
+blocking artifact and next action instead of weakening gates or implying the
+run produced a publishable report.
 
 ## CLI target
 
@@ -103,6 +224,19 @@ Unless specifically requested, do not build:
 - PDF or DOCX export
 - vector database
 - complex SEC parser
+
+Stop rather than adding these excluded features to work around a CLI, artifact,
+or local-environment issue.
+
+## Test commands
+
+The full `make check` target runs the standard local test bundle:
+
+```bash
+pytest
+ruff check .
+mypy src
+```
 
 ## File conventions
 
