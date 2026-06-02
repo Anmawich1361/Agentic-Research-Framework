@@ -72,6 +72,12 @@ General run shape:
 .venv/bin/arf run "Research <target> before <event>" [--mock] [--checkpoint-only | --full] [--qa] [--mode brief|standard|deep_dive] [--lens sales|investment|strategy|industry|general]
 ```
 
+Start a guided new-run wizard:
+
+```bash
+.venv/bin/arf wizard
+```
+
 Run a deterministic mock checkpoint:
 
 ```bash
