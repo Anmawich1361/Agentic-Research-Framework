@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import site
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ def main() -> int:
     print(f"branch: {_current_branch()}")
     print(f"python executable: {sys.executable}")
     _print_pip_executable()
+    _repair_hidden_venv_flags()
     _print_sys_path()
     _print_pythonpath_status()
     _verify_pytest()
@@ -80,6 +82,49 @@ def _print_pythonpath_status() -> None:
         str(Path(item).resolve()) for item in pythonpath.split(os.pathsep) if item
     }
     print(f"PYTHONPATH includes repo src: {includes_repo_src}")
+
+
+def _repair_hidden_venv_flags() -> None:
+    if sys.platform != "darwin":
+        return
+
+    venv_dir = PROJECT_ROOT / ".venv"
+    if not venv_dir.exists():
+        return
+
+    chflags = shutil.which("chflags")
+    if chflags is None:
+        return
+
+    result = subprocess.run(
+        [chflags, "-R", "nohidden", str(venv_dir)],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        _fail(
+            "Could not clear macOS hidden flags on .venv. "
+            "Run 'chflags -R nohidden .venv', then 'make doctor'.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+    site_packages = _venv_site_packages_dir()
+    if site_packages is not None:
+        site.addsitedir(str(site_packages))
+    print("macOS hidden flags on .venv: cleared")
+
+
+def _venv_site_packages_dir() -> Path | None:
+    lib_dir = PROJECT_ROOT / ".venv" / "lib"
+    if not lib_dir.exists():
+        return None
+
+    for candidate in sorted(lib_dir.glob("python*/site-packages")):
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 def _verify_pytest() -> None:

@@ -31,6 +31,17 @@ repair_venv_permissions() {
     find "$VENV_DIR" -name ".DS_Store" -type f -delete 2>/dev/null || true
 }
 
+clear_venv_hidden_flags() {
+    if ! venv_exists; then
+        return
+    fi
+
+    if command -v chflags >/dev/null 2>&1; then
+        echo "Clearing macOS hidden flags on $VENV_DIR"
+        chflags -R nohidden "$VENV_DIR" 2>/dev/null || true
+    fi
+}
+
 verify_venv_removed() {
     if ! venv_exists; then
         return
@@ -66,11 +77,13 @@ remove_venv
 
 echo "Creating .venv with python3"
 python3 -m venv .venv
+clear_venv_hidden_flags
 
 echo "Upgrading pip, setuptools, and wheel"
 .venv/bin/python -m pip install --upgrade pip setuptools wheel
 
 echo "Installing agentic-research-framework in editable mode with dev extras"
 .venv/bin/python -m pip install -e ".[dev]"
+clear_venv_hidden_flags
 
 echo "Environment reset complete. Run 'make doctor' next."

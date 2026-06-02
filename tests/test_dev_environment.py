@@ -64,6 +64,16 @@ def test_reset_env_verifies_venv_removed_before_recreating() -> None:
     assert script.index("verify_venv_removed") < script.index("python3 -m venv .venv")
 
 
+def test_reset_env_clears_hidden_flags_after_installing_editable_package() -> None:
+    script = (PROJECT_ROOT / "scripts" / "reset_env.sh").read_text(encoding="utf-8")
+
+    assert "clear_venv_hidden_flags" in script
+    assert "chflags -R nohidden" in script
+    assert script.index(".venv/bin/python -m pip install -e") < script.rindex(
+        "clear_venv_hidden_flags"
+    )
+
+
 def test_doctor_env_checks_pytest_availability() -> None:
     script = (PROJECT_ROOT / "scripts" / "doctor_env.py").read_text(encoding="utf-8")
 
@@ -72,6 +82,15 @@ def test_doctor_env_checks_pytest_availability() -> None:
     assert "import pytest" in script
     assert "pytest.__file__" in script
     assert "make reset-env" in script
+
+
+def test_doctor_env_repairs_hidden_venv_flags_before_import_check() -> None:
+    script = (PROJECT_ROOT / "scripts" / "doctor_env.py").read_text(encoding="utf-8")
+
+    assert "_repair_hidden_venv_flags()" in script
+    assert "chflags" in script
+    assert "site.addsitedir" in script
+    assert script.index("_repair_hidden_venv_flags()") < script.index("_verify_import()")
 
 
 def test_doctor_env_script_has_cli_help() -> None:
