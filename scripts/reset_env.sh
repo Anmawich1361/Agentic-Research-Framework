@@ -42,6 +42,37 @@ clear_venv_hidden_flags() {
     fi
 }
 
+site_packages_dir() {
+    for candidate in "$VENV_DIR"/lib/python*/site-packages; do
+        if [ -d "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_editable_import_fallback() {
+    if ! venv_exists; then
+        return
+    fi
+
+    local site_packages=""
+    if ! site_packages="$(site_packages_dir)"; then
+        return
+    fi
+
+    local target="$ROOT_DIR/src/agentic_research"
+    local fallback="$site_packages/agentic_research"
+    if [ -d "$target" ] && { [ -L "$fallback" ] || [ ! -e "$fallback" ]; }; then
+        echo "Creating direct editable import fallback for src/agentic_research"
+        ln -sfn "$target" "$fallback"
+        if command -v chflags >/dev/null 2>&1; then
+            chflags -R nohidden "$fallback" 2>/dev/null || true
+        fi
+    fi
+}
+
 verify_venv_removed() {
     if ! venv_exists; then
         return
@@ -85,5 +116,6 @@ echo "Upgrading pip, setuptools, and wheel"
 echo "Installing agentic-research-framework in editable mode with dev extras"
 .venv/bin/python -m pip install -e ".[dev]"
 clear_venv_hidden_flags
+ensure_editable_import_fallback
 
 echo "Environment reset complete. Run 'make doctor' next."

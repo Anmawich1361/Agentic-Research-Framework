@@ -23,6 +23,7 @@ def main() -> int:
     print(f"python executable: {sys.executable}")
     _print_pip_executable()
     _repair_hidden_venv_flags()
+    _ensure_editable_import_fallback()
     _print_sys_path()
     _print_pythonpath_status()
     _verify_pytest()
@@ -125,6 +126,29 @@ def _venv_site_packages_dir() -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def _ensure_editable_import_fallback() -> None:
+    site_packages = _venv_site_packages_dir()
+    if site_packages is None or not EXPECTED_PACKAGE_DIR.exists():
+        return
+
+    fallback = site_packages / "agentic_research"
+    if fallback.is_symlink():
+        fallback.unlink()
+    elif fallback.exists():
+        return
+
+    fallback.symlink_to(EXPECTED_PACKAGE_DIR, target_is_directory=True)
+    if sys.platform == "darwin" and (chflags := shutil.which("chflags")) is not None:
+        subprocess.run(
+            [chflags, "-R", "nohidden", str(fallback)],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    print("editable import fallback: ok")
 
 
 def _verify_pytest() -> None:
