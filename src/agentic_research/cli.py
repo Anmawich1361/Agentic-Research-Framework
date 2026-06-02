@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, Any, cast
 
 import typer
+from dotenv import load_dotenv
 
 from agentic_research.artifact_review import build_artifact_review, write_artifact_review
 from agentic_research.models import CheckpointAnswer, UserFeedback
@@ -15,7 +16,7 @@ from agentic_research.orchestrator import (
     run_research,
     save_user_feedback,
 )
-from agentic_research.settings import get_artifact_dir
+from agentic_research.settings import PROJECT_ROOT, get_artifact_dir
 
 
 app = typer.Typer(help="Agentic Research Framework CLI.")
@@ -27,6 +28,7 @@ RUN_PATH_CHOICES = ["checkpoint first", "full QA report"]
 @app.callback()
 def main() -> None:
     """Top-level CLI group."""
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 @app.command("run")
