@@ -229,6 +229,50 @@ def test_cli_run_subcommand_accepts_qa_mode(monkeypatch, tmp_path) -> None:
     assert "run_qa" in result.stdout
 
 
+def test_cli_wizard_loads_repo_dotenv_before_run(monkeypatch, tmp_path) -> None:
+    calls = []
+    checkpoint_path = tmp_path / "runs" / "run_wizard_dotenv" / "checkpoint.md"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text("# checkpoint", encoding="utf-8")
+    result_obj = SimpleNamespace(
+        metadata=RunMetadata(
+            run_id="run_wizard_dotenv",
+            created_at="2026-05-18T00:00:00+00:00",
+            request="Research ATS Corporation before meeting",
+            status="checkpoint_ready",
+            mode="standard",
+            lens="investment",
+            mock=False,
+        ),
+        checkpoint_path=checkpoint_path,
+        run_dir=checkpoint_path.parent,
+        draft_report_path=None,
+        report_path=None,
+        report=None,
+    )
+
+    def fake_load_dotenv(path, *, override=False):
+        calls.append((Path(path), override))
+        return True
+
+    def fake_run_research(*args, **kwargs):
+        assert calls
+        return result_obj
+
+    monkeypatch.setattr(cli, "load_dotenv", fake_load_dotenv, raising=False)
+    monkeypatch.setattr(cli, "run_research", fake_run_research)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.app,
+        ["wizard"],
+        input="ATS Corporation\nmeeting\ninvestment\nstandard\ncheckpoint first\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(Path(cli.__file__).resolve().parents[2] / ".env", False)]
+
+
 def test_cli_wizard_defaults_to_checkpoint_first(monkeypatch, tmp_path) -> None:
     captured = {}
     checkpoint_path = tmp_path / "runs" / "run_wizard_checkpoint" / "checkpoint.md"
