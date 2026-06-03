@@ -16,6 +16,7 @@ feedback, approval, or a later full/continue command.
 
 Expected artifacts: `metadata.json`, `charter.json`, `research_plan.json`,
 `sources.json`, `source_map.json`, `checkpoint.md`, and `run_log.jsonl`.
+Live runs should also include `source_discovery_review.json`.
 
 `report.md`: Should not exist.
 
@@ -29,7 +30,8 @@ and the run is ready for synthesis. This is mostly an internal or transitional
 status; successful full runs usually continue into draft generation.
 
 Expected artifacts: checkpoint artifacts plus `source_content.json`,
-`source_fetch_log.json`, `evidence_ledger.json`, and `run_log.jsonl`.
+`source_fetch_log.json`, `source_discovery_review.json`,
+`evidence_ledger.json`, and `run_log.jsonl`.
 
 `report.md`: Should not exist.
 
@@ -42,9 +44,10 @@ Meaning: Evidence validation produced blocking warnings, so synthesis and QA
 were not run.
 
 Expected artifacts: checkpoint artifacts plus `source_content.json`,
-`source_fetch_log.json`, `evidence_ledger.json`, `evidence_review.md`,
-`artifact_review.md`, and `run_log.jsonl`. `specialist_analyses.json` may also
-exist if specialists ran before the blocker was detected.
+`source_fetch_log.json`, `source_discovery_review.json`,
+`evidence_ledger.json`, `evidence_review.md`, `artifact_review.md`, and
+`run_log.jsonl`. `specialist_analyses.json` may also exist if specialists ran
+before the blocker was detected.
 
 `report.md`: Should not exist.
 
@@ -57,8 +60,9 @@ Meaning: A draft report was written, but QA was not requested or has not
 approved final publication.
 
 Expected artifacts: checkpoint artifacts plus full-run artifacts including
-`evidence_ledger.json`, `specialist_analyses.json` when specialists ran,
-`draft_report.md`, `artifact_review.md`, and `run_log.jsonl`.
+`source_discovery_review.json`, `evidence_ledger.json`,
+`specialist_analyses.json` when specialists ran, `draft_report.md`,
+`artifact_review.md`, and `run_log.jsonl`.
 
 `report.md`: Should not exist.
 

@@ -15,6 +15,7 @@ EXPECTED_ARTIFACTS = (
     "research_plan.json",
     "sources.json",
     "source_map.json",
+    "source_discovery_review.json",
     "source_content.json",
     "source_fetch_log.json",
     "checkpoint.md",
@@ -41,6 +42,11 @@ class ArtifactReview(StrictModel):
     source_fetch_fallback_count: int
     source_fetch_failed_count: int
     source_fetch_skipped_count: int
+    source_discovery_query_count: int
+    source_discovery_raw_result_count: int
+    source_discovery_repair_added_count: int
+    source_discovery_unresolved_gap_count: int
+    source_discovery_coverage_gap_count: int
     qa_high_count: int
     qa_medium_count: int
     qa_low_count: int
@@ -73,6 +79,12 @@ class ArtifactReview(StrictModel):
             f"{self.source_fetch_fallback_count} fallback, "
             f"{self.source_fetch_failed_count} failed, "
             f"{self.source_fetch_skipped_count} skipped\n\n"
+            "## Source Discovery\n"
+            f"- Source discovery queries: {self.source_discovery_query_count}\n"
+            f"- Raw search results: {self.source_discovery_raw_result_count}\n"
+            f"- Repair-added sources: {self.source_discovery_repair_added_count}\n"
+            f"- Unresolved source gaps: {self.source_discovery_unresolved_gap_count}\n"
+            f"- Coverage gaps: {self.source_discovery_coverage_gap_count}\n\n"
             "## QA Issues\n"
             f"- High: {self.qa_high_count}\n"
             f"- Medium: {self.qa_medium_count}\n"
@@ -134,6 +146,17 @@ def _source_fetch_counts(run_dir: Path) -> tuple[int, int, int, int]:
     return fetched, fallback, failed, skipped
 
 
+def _source_discovery_counts(run_dir: Path) -> tuple[int, int, int, int, int]:
+    review = _load_json(run_dir / "source_discovery_review.json")
+    return (
+        int(review.get("query_count") or 0),
+        int(review.get("raw_result_count") or 0),
+        len(review.get("repair_added_source_ids", [])),
+        len(review.get("unresolved_gaps", [])),
+        len(review.get("coverage_gaps", [])),
+    )
+
+
 def _plural(count: int, noun: str) -> str:
     suffix = "" if count == 1 else "s"
     return f"{count} {noun}{suffix}"
@@ -170,6 +193,8 @@ def _blocking_warnings(
     source_fetch_fallback_count: int,
     source_fetch_failed_count: int,
     source_fetch_skipped_count: int,
+    source_discovery_unresolved_gap_count: int,
+    source_discovery_coverage_gap_count: int,
     final_report_published: bool,
 ) -> list[str]:
     warnings: list[str] = []
@@ -180,6 +205,16 @@ def _blocking_warnings(
     if source_fetch_fallback_count:
         warnings.append(
             f"{_plural(source_fetch_fallback_count, 'fallback-only source fetch')}."
+        )
+    if source_discovery_unresolved_gap_count:
+        warnings.append(
+            f"Source discovery has "
+            f"{_plural(source_discovery_unresolved_gap_count, 'unresolved source gap')}."
+        )
+    if source_discovery_coverage_gap_count:
+        warnings.append(
+            f"Source coverage has "
+            f"{_plural(source_discovery_coverage_gap_count, 'blocking coverage gap')}."
         )
 
     ledger = _load_json(run_dir / "evidence_ledger.json")
@@ -242,6 +277,13 @@ def build_artifact_review(run_dir: str | Path) -> ArtifactReview:
         source_fetch_failed_count,
         source_fetch_skipped_count,
     ) = _source_fetch_counts(resolved_run_dir)
+    (
+        source_discovery_query_count,
+        source_discovery_raw_result_count,
+        source_discovery_repair_added_count,
+        source_discovery_unresolved_gap_count,
+        source_discovery_coverage_gap_count,
+    ) = _source_discovery_counts(resolved_run_dir)
     final_report_published = (resolved_run_dir / "report.md").exists()
     status = str(metadata.get("status", "unknown"))
     publication_state = _publication_state(
@@ -263,6 +305,11 @@ def build_artifact_review(run_dir: str | Path) -> ArtifactReview:
         source_fetch_fallback_count=source_fetch_fallback_count,
         source_fetch_failed_count=source_fetch_failed_count,
         source_fetch_skipped_count=source_fetch_skipped_count,
+        source_discovery_query_count=source_discovery_query_count,
+        source_discovery_raw_result_count=source_discovery_raw_result_count,
+        source_discovery_repair_added_count=source_discovery_repair_added_count,
+        source_discovery_unresolved_gap_count=source_discovery_unresolved_gap_count,
+        source_discovery_coverage_gap_count=source_discovery_coverage_gap_count,
         qa_high_count=high_count,
         qa_medium_count=medium_count,
         qa_low_count=low_count,
@@ -274,6 +321,8 @@ def build_artifact_review(run_dir: str | Path) -> ArtifactReview:
             source_fetch_fallback_count=source_fetch_fallback_count,
             source_fetch_failed_count=source_fetch_failed_count,
             source_fetch_skipped_count=source_fetch_skipped_count,
+            source_discovery_unresolved_gap_count=source_discovery_unresolved_gap_count,
+            source_discovery_coverage_gap_count=source_discovery_coverage_gap_count,
             final_report_published=final_report_published,
         ),
         next_recommended_action=_next_action(

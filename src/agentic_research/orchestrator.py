@@ -91,6 +91,12 @@ from agentic_research.source_context import (
     weak_fallback_context_payload as _weak_fallback_context_payload,
     weak_fallback_contexts as _weak_fallback_contexts,
 )
+from agentic_research.source_discovery_repair import (
+    build_source_discovery_review,
+    investment_source_coverage_gaps,
+    qa_review_with_source_coverage_gaps,
+    repair_source_map_from_feedback,
+)
 from agentic_research.source_ingestion import SourceFetcher, ingest_source_content
 from agentic_research.specialists import (
     build_mock_specialist_analyses,
@@ -116,6 +122,21 @@ class _SynthesisQaResult(BaseModel):
     qa_review: QAReview | None
     status: str
     write_final_report: bool
+
+
+def _feedback_text_for_search(feedback: UserFeedback | None) -> str | None:
+    if feedback is None:
+        return None
+    text = " ".join(
+        [
+            " ".join(
+                answer.answer for answer in feedback.answered_checkpoint_questions
+            ),
+            feedback.user_notes or "",
+            " ".join(feedback.priority_topics),
+        ]
+    ).strip()
+    return text or None
 
 
 def _new_run_id() -> str:
@@ -643,6 +664,7 @@ def _run_synthesis_and_qa(
     run_dir: Path,
     run_logger: RunLogger,
     feedback: UserFeedback | None = None,
+    source_coverage_gaps: list[str] | None = None,
 ) -> _SynthesisQaResult:
     if _has_blocking_evidence_warnings(evidence_ledger):
         return _SynthesisQaResult(
@@ -723,6 +745,13 @@ def _run_synthesis_and_qa(
             status = "needs_review" if has_high_severity_issues(qa_review) else "report_ready"
         else:
             status = "draft_needs_qa"
+
+    if source_coverage_gaps and qa:
+        qa_review = qa_review_with_source_coverage_gaps(
+            qa_review,
+            source_coverage_gaps,
+        )
+        status = "needs_review"
 
     return _SynthesisQaResult(
         report=report,
@@ -927,6 +956,15 @@ def _continue_research_impl(
 
     search_client = search_client or WebSearchClient()
     agents = create_agent_set(model=model, search_client=search_client)
+    repair_result = repair_source_map_from_feedback(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        feedback=feedback,
+        search_client=search_client,
+    )
+    source_map = repair_result.source_map
+    source_discovery_review = repair_result.review
     selected_specialists = select_specialists(charter, plan)
     approved_sources = _approved_sources(source_map)
     run_logger.tool_call("source_ingestion", status="start", source_count=len(source_map.sources))
@@ -943,6 +981,22 @@ def _continue_research_impl(
     source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
     sources = list(source_map.sources)
     approved_sources = _approved_sources(source_map)
+    source_coverage_gaps = investment_source_coverage_gaps(
+        charter=charter,
+        plan=plan,
+        source_map=source_map,
+        source_fetch_log=source_fetch_log,
+    )
+    source_discovery_review = build_source_discovery_review(
+        queries=repair_result.queries,
+        raw_search_results=repair_result.raw_search_results,
+        selected_sources=source_map.sources,
+        search_failures=repair_result.search_failures,
+        source_map=source_map,
+        repair_added_source_ids=repair_result.repair_added_source_ids,
+        source_fetch_log=source_fetch_log,
+        coverage_gaps=source_coverage_gaps,
+    )
     weak_fallback_contexts: list[SourceFallbackContext] = []
     feedback_payload = _user_feedback_prompt_payload(feedback)
     evidence_payload = {
@@ -1056,6 +1110,7 @@ def _continue_research_impl(
         run_dir=run_dir,
         run_logger=run_logger,
         feedback=feedback,
+        source_coverage_gaps=source_coverage_gaps,
     )
     report = synthesis_result.report
     qa_review = synthesis_result.qa_review
@@ -1073,6 +1128,7 @@ def _continue_research_impl(
         source_map=source_map,
         source_content=source_content,
         source_fetch_log=source_fetch_log,
+        source_discovery_review=source_discovery_review,
         user_feedback=feedback,
         specialist_analyses=specialist_analyses,
         evidence_ledger=evidence_ledger,
@@ -1359,12 +1415,20 @@ def _run_research_impl(
         source_map.gaps.extend(search_failure_gaps)
     if source_discovery.gaps:
         source_map.gaps.extend(source_discovery.gaps)
+    source_discovery_review = build_source_discovery_review(
+        queries=source_search_queries,
+        raw_search_results=raw_search_results,
+        selected_sources=source_map.sources,
+        search_failures=search_failures,
+        source_map=source_map,
+    )
 
     evidence_ledger = None
     report = None
     qa_review = None
     source_content: list[SourceContent] = []
     source_fetch_log: SourceFetchLog | None = None
+    source_coverage_gaps: list[str] = []
     specialist_analyses: list[SpecialistAnalysis] = []
     write_final_report = False
     status = "checkpoint_ready"
@@ -1397,6 +1461,21 @@ def _run_research_impl(
         source_map = _source_map_with_fetch_verification_notes(source_map, source_fetch_log)
         sources = list(source_map.sources)
         approved_sources = _approved_sources(source_map)
+        source_coverage_gaps = investment_source_coverage_gaps(
+            charter=charter,
+            plan=plan,
+            source_map=source_map,
+            source_fetch_log=source_fetch_log,
+        )
+        source_discovery_review = build_source_discovery_review(
+            queries=source_search_queries,
+            raw_search_results=raw_search_results,
+            selected_sources=source_map.sources,
+            search_failures=search_failures,
+            source_map=source_map,
+            source_fetch_log=source_fetch_log,
+            coverage_gaps=source_coverage_gaps,
+        )
         evidence_payload = {
             "charter": charter.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
@@ -1503,6 +1582,7 @@ def _run_research_impl(
             agent_runner=agent_runner,
             run_dir=run_dir,
             run_logger=run_logger,
+            source_coverage_gaps=source_coverage_gaps,
         )
         report = synthesis_result.report
         qa_review = synthesis_result.qa_review
@@ -1521,6 +1601,7 @@ def _run_research_impl(
         source_map=source_map,
         source_content=source_content,
         source_fetch_log=source_fetch_log,
+        source_discovery_review=source_discovery_review,
         specialist_analyses=specialist_analyses,
         evidence_ledger=evidence_ledger,
         report=report,

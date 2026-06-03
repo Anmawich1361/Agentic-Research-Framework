@@ -4,7 +4,7 @@ import re
 import os
 from collections.abc import Callable, Mapping
 from io import BytesIO
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -181,11 +181,66 @@ def _dedupe_fallback_urls(source: SourceCandidate, urls: list[str]) -> list[str]
     return deduped
 
 
+def _company_result_link_candidates(source: SourceCandidate, timeout_seconds: float) -> list[str]:
+    try:
+        response = _httpx_fetch(source.url, timeout_seconds)
+    except Exception:
+        return []
+    if response.status_code >= 400:
+        return []
+    content_type = _content_type(response.headers) or ""
+    if content_type and not any(marker in content_type for marker in _HTML_CONTENT_MARKERS):
+        return []
+
+    from bs4 import BeautifulSoup
+
+    source_text = " ".join(
+        [
+            source.source_type,
+            source.title,
+            source.relevance_rationale,
+            " ".join(source.recommended_uses),
+        ]
+    ).lower()
+    soup = BeautifulSoup(response.text, "html.parser")
+    scored_urls: list[tuple[int, str]] = []
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "").strip()
+        if not href:
+            continue
+        url = urljoin(response.url or source.url, href)
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        text = f"{link.get_text(' ', strip=True)} {href} {source_text}".lower()
+        score = 0
+        for term in (
+            "press release",
+            "pressrelease",
+            "earnings",
+            "results",
+            "financial-results",
+            "financial results",
+            "quarter",
+            "q4",
+            "q3",
+            "q2",
+            "q1",
+            "doc_earnings",
+            ".pdf",
+        ):
+            if term in text:
+                score += 1
+        if score:
+            scored_urls.append((score, url))
+    scored_urls.sort(key=lambda item: item[0], reverse=True)
+    return [url for _score, url in scored_urls[:5]]
+
+
 def resolve_company_source_fallback_urls(
     source: SourceCandidate,
     timeout_seconds: float,
 ) -> list[str]:
-    del timeout_seconds
     base_url = _base_url_for_source(source)
     if base_url is None:
         return []
@@ -233,7 +288,13 @@ def resolve_company_source_fallback_urls(
                 f"{base_url}/investors/sec-filings",
             ]
         )
-    return _dedupe_fallback_urls(source, candidates)[:3]
+    if source.source_type in {
+        "investor_material",
+        "earnings_release",
+        "earnings_transcript",
+    } or any(term in source_text for term in ("investor", "earnings", "results")):
+        candidates.extend(_company_result_link_candidates(source, timeout_seconds))
+    return _dedupe_fallback_urls(source, candidates)[:5]
 
 
 def _fetch_preference_rank(source: SourceCandidate) -> int:
