@@ -22,6 +22,32 @@ SOURCE_NEED_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "recent_sec_filing",
+        (
+            "6-k",
+            "6 k",
+            "8-k",
+            "8 k",
+            "foreign issuer",
+            "recent sec",
+            "recent filing",
+            "quarterly filing",
+        ),
+    ),
+    (
+        "earnings_release",
+        (
+            "earnings release",
+            "earnings releases",
+            "results release",
+            "quarterly results",
+            "financial results",
+            "press release",
+            "md&a",
+            "management discussion",
+        ),
+    ),
+    (
         "investor_material",
         (
             "investor presentation",
@@ -50,6 +76,35 @@ SOURCE_NEED_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "earnings call",
             "quarterly call",
             "transcript",
+        ),
+    ),
+    (
+        "market_data",
+        (
+            "market data",
+            "valuation",
+            "valuation screen",
+            "valuation screens",
+            "trading history",
+            "share price",
+            "stock quote",
+            "ev/ebitda",
+            "p/e",
+            "free cash flow yield",
+            "fcf yield",
+        ),
+    ),
+    (
+        "peer_source",
+        (
+            "peer company",
+            "peer companies",
+            "peer source",
+            "peer sources",
+            "peers",
+            "comparable company",
+            "comparable companies",
+            "competitor comparison",
         ),
     ),
     (

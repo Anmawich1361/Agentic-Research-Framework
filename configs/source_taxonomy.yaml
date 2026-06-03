@@ -3,14 +3,30 @@ source_types:
     authority_default: 5
     bias_risk_default: low
     examples: ["10-K", "10-Q", "S-1", "proxy", "annual report"]
+  recent_sec_filing:
+    authority_default: 5
+    bias_risk_default: low
+    examples: ["6-K earnings exhibit", "8-K results release", "10-Q quarterly filing"]
   government_data:
     authority_default: 5
     bias_risk_default: low
     examples: ["SEC", "BLS", "Census", "FRED", "World Bank"]
+  earnings_release:
+    authority_default: 5
+    bias_risk_default: medium
+    examples: ["quarterly results press release", "official earnings release"]
   earnings_transcript:
     authority_default: 4
     bias_risk_default: medium
     examples: ["earnings call transcript", "quarterly call"]
+  market_data:
+    authority_default: 3
+    bias_risk_default: medium
+    examples: ["stock quote", "valuation screen", "trading history"]
+  peer_source:
+    authority_default: 3
+    bias_risk_default: medium
+    examples: ["peer comparison", "competitor market data", "comparable companies"]
   investor_material:
     authority_default: 4
     bias_risk_default: medium

@@ -1339,6 +1339,141 @@ def test_continue_includes_user_feedback_and_excludes_rejected_sources(
     assert [source["id"] for source in source_map["sources"]] == ["src_keep"]
 
 
+def test_live_continue_repairs_source_map_from_feedback_before_ingestion(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fake_checkpoint_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="ATS Corporation",
+                target_type="company",
+                research_lens="investment",
+                depth="standard",
+                deliverable="investment_meeting_brief",
+                key_questions=["Should we invest after the latest earnings release?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What changed in the latest quarter?"],
+                report_sections=["overview", "latest_results", "valuation"],
+                required_source_types=[
+                    "Management discussion & analysis (MD&A) and earnings release/transcript",
+                    "market data / valuation screens / trading history",
+                ],
+                checkpoint_questions=["Which valuation lens should be prioritized?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_annual",
+                        title="ATS annual report",
+                        publisher="ATS Corporation",
+                        url="https://www.sec.gov/Archives/edgar/data/1394832/annual.htm",
+                        source_type="corporate_filing",
+                        bias_risk="low",
+                        relevance_rationale="Annual filing.",
+                        recommended_uses=["business overview"],
+                    )
+                ],
+                gaps=["No direct earnings release source was discovered."],
+            )
+        raise AssertionError(f"Unexpected checkpoint agent call: {agent_key}")
+
+    checkpoint = run_research(
+        "Research ATS Corporation before an investment meeting",
+        checkpoint_only=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_checkpoint_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+    save_user_feedback(
+        checkpoint.run_dir,
+        UserFeedback(
+            user_notes="Earnings were just reported May 28 2026.",
+            priority_topics=["valuation"],
+            approved_source_ids=["src_annual"],
+        ),
+    )
+    calls.clear()
+
+    class AtsContinuationSearchProvider:
+        def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+            if "earnings release" in query.lower():
+                return [
+                    SearchResult(
+                        title="ATS Reports Fourth Quarter Fiscal 2026 Results",
+                        publisher="U.S. Securities and Exchange Commission",
+                        url=(
+                            "https://www.sec.gov/Archives/edgar/data/1394832/"
+                            "000139483226000017/ats-pressreleasexfy26q4.htm"
+                        ),
+                        snippet="ATS reports fourth quarter fiscal 2026 results.",
+                        publication_date="2026-05-28",
+                    )
+                ][:max_results]
+            if "market data valuation" in query.lower():
+                return [
+                    SearchResult(
+                        title="ATS market data",
+                        publisher="Yahoo Finance",
+                        url="https://finance.yahoo.com/quote/ATS.TO/",
+                        snippet="ATS share price and valuation context.",
+                    )
+                ][:max_results]
+            return []
+
+    def fake_fetcher(url: str, timeout_seconds: float) -> SourceHttpResponse:
+        del timeout_seconds
+        return SourceHttpResponse(
+            url=url,
+            status_code=200,
+            headers={"content-type": "text/html"},
+            text=(
+                "<html><body><main>"
+                "<p>ATS Reports Fourth Quarter Fiscal 2026 Results on May 28, 2026.</p>"
+                "<p>Market data page contains valuation context.</p>"
+                "</main></body></html>"
+            ),
+        )
+
+    def fake_continue_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        calls.append(agent_key)
+        if agent_key == "evidence_extraction":
+            assert "repair_earnings_release_1" in prompt
+            assert "ats-pressreleasexfy26q4.htm" in prompt
+            return EvidenceExtractionResult(claims=[])
+        raise AssertionError(f"Unexpected continue agent call: {agent_key}")
+
+    result = continue_research(
+        checkpoint.metadata.run_id,
+        runs_dir=tmp_path,
+        mock=False,
+        agent_runner=fake_continue_agent_runner,
+        source_fetcher=fake_fetcher,
+        search_client=WebSearchClient(provider=AtsContinuationSearchProvider()),
+    )
+
+    source_map = json.loads((checkpoint.run_dir / "source_map.json").read_text())
+    review = json.loads(
+        (checkpoint.run_dir / "source_discovery_review.json").read_text()
+    )
+
+    assert result.metadata.status == "evidence_needs_review"
+    assert calls == ["evidence_extraction"]
+    assert any(source["id"] == "repair_earnings_release_1" for source in source_map["sources"])
+    assert any(source["source_type"] == "market_data" for source in source_map["sources"])
+    assert review["repair_added_source_ids"] == [
+        "repair_earnings_release_1",
+        "repair_market_data_1",
+    ]
+    assert review["fetch_status_counts"]["fetched"] == 3
+
+
 def test_synthesis_payload_builder_scopes_user_feedback_to_continue() -> None:
     charter = ResearchCharter(
         target="Costco",
@@ -1605,7 +1740,7 @@ def test_live_checkpoint_includes_mocked_search_results_in_source_agent_prompt(
     search_client = WebSearchClient(
         provider=StaticSearchProvider(
             {
-                "Costco official company primary source supplier meeting": [
+                "Costco official company primary source": [
                     SearchResult(
                         title="Costco supplier information",
                         publisher="Costco",
@@ -1614,7 +1749,7 @@ def test_live_checkpoint_includes_mocked_search_results_in_source_agent_prompt(
                         publication_date="2026-01-10",
                     )
                 ],
-                "Costco recent news supplier meeting": [
+                "Costco recent news": [
                     SearchResult(
                         title="Recent Costco supplier coverage",
                         publisher="Mock News",
@@ -1753,7 +1888,7 @@ def test_live_checkpoint_records_failed_search_queries_in_source_map_gaps(
     assert source_map is not None
     assert "No earnings transcript source was discovered." in source_map.gaps
     assert any(
-        "Search query failed: Costco SEC 10-K annual report site:sec.gov supplier meeting"
+        "Search query failed: Costco SEC 10-K annual report site:sec.gov"
         in gap
         and "TimeoutError: search timeout" in gap
         for gap in source_map.gaps
@@ -1894,6 +2029,7 @@ def test_full_run_without_qa_writes_draft_only_from_mocked_synthesis_output(
         "research_plan.json",
         "sources.json",
         "source_map.json",
+        "source_discovery_review.json",
         "source_content.json",
         "source_fetch_log.json",
         "specialist_analyses.json",
@@ -3361,6 +3497,7 @@ def test_specialist_claim_with_unknown_source_blocks_publication(tmp_path: Path)
         "research_plan.json",
         "sources.json",
         "source_map.json",
+        "source_discovery_review.json",
         "source_content.json",
         "source_fetch_log.json",
         "specialist_analyses.json",
@@ -3863,6 +4000,7 @@ def test_full_qa_run_saves_review_and_blocks_final_report_on_high_issue(tmp_path
         "research_plan.json",
         "sources.json",
         "source_map.json",
+        "source_discovery_review.json",
         "source_content.json",
         "source_fetch_log.json",
         "specialist_analyses.json",
