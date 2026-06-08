@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from agentic_research.models import (
     EvidenceClaim,
     EvidenceLedger as EvidenceLedgerModel,
@@ -42,6 +44,40 @@ _CONSERVATIVE_REPORT_SOURCE_TYPES = {
     "investor_material",
     "primary_company",
 }
+
+_INVESTMENT_MEETING_INCLUDE_MARKERS = (
+    "adjusted ebitda",
+    "adjusted revenues",
+    "capital deployment",
+    "cyclical",
+    "ebitda",
+    "fixed-cost",
+    "free cash flow",
+    "large-program timing",
+    "leverage",
+    "margin",
+    "order backlog",
+    "order bookings",
+    "quarter",
+    "revenue",
+    "transportation",
+    "working capital",
+)
+
+_INVESTMENT_MEETING_EXCLUDE_MARKERS = (
+    "broad customer base",
+    "diversified",
+    "funnel",
+    "momentum",
+    "optimistic",
+    "solid revenue visibility",
+    "visibility into",
+)
+
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+_PERIOD_SIGNAL_RE = re.compile(
+    r"\b(?:q[1-4]|first[- ]quarter|second[- ]quarter|third[- ]quarter|fourth[- ]quarter)\b"
+)
 
 
 def _unique_nonempty(items: list[str]) -> list[str]:
@@ -248,6 +284,62 @@ def _is_conservative_report_claim(
     return not any(marker in claim_text for marker in _CONSERVATIVE_REPORT_EXCLUDE_MARKERS)
 
 
+def _is_investment_meeting_context(charter: ResearchCharter) -> bool:
+    deliverable = charter.deliverable.lower()
+    return charter.research_lens == "investment" and "meeting" in deliverable
+
+
+def _is_investment_meeting_claim(
+    claim: EvidenceClaim,
+    *,
+    source_lookup: dict[str, SourceCandidate],
+) -> bool:
+    source = source_lookup.get(claim.source_id or "")
+    source_type = (claim.source_type or (source.source_type if source else "")).lower()
+    if source_type not in _CONSERVATIVE_REPORT_SOURCE_TYPES:
+        return False
+    if claim.claim_type != "fact":
+        return False
+    claim_text = f"{claim.claim} {claim.report_section}".lower()
+    if any(marker in claim_text for marker in _INVESTMENT_MEETING_EXCLUDE_MARKERS):
+        return False
+    return any(marker in claim_text for marker in _INVESTMENT_MEETING_INCLUDE_MARKERS)
+
+
+def _investment_meeting_claim_priority(
+    claim: EvidenceClaim,
+    *,
+    source_lookup: dict[str, SourceCandidate],
+) -> tuple[int, int]:
+    source = source_lookup.get(claim.source_id or "")
+    claim_text = f"{claim.claim} {claim.report_section}".lower()
+    publication_date = (source.publication_date or "") if source is not None else ""
+    has_dated_source_or_period = bool(
+        _YEAR_RE.search(publication_date)
+        or _YEAR_RE.search(claim_text)
+        or _PERIOD_SIGNAL_RE.search(claim_text)
+    )
+    if has_dated_source_or_period and any(
+        marker in claim_text
+        for marker in (
+            "adjusted ebitda",
+            "free cash flow",
+            "leverage",
+            "order backlog",
+            "order bookings",
+            "revenue",
+            "working capital",
+        )
+    ):
+        return (0, 0)
+    if any(
+        marker in claim_text
+        for marker in ("cyclical", "fixed-cost", "large-program timing", "transportation")
+    ):
+        return (1, 0)
+    return (2, 0)
+
+
 def _conservative_report_claims(
     evidence_ledger: EvidenceLedgerModel,
     *,
@@ -258,6 +350,29 @@ def _conservative_report_claims(
         claim
         for claim in evidence_ledger.claims
         if _is_conservative_report_claim(claim, source_lookup=source_lookup)
+    ]
+
+
+def _investment_meeting_report_claims(
+    evidence_ledger: EvidenceLedgerModel,
+    *,
+    source_map: SourceMap,
+) -> list[EvidenceClaim]:
+    source_lookup = {source.id: source for source in source_map.sources}
+    indexed_claims = [
+        (index, claim)
+        for index, claim in enumerate(evidence_ledger.claims)
+        if _is_investment_meeting_claim(claim, source_lookup=source_lookup)
+    ]
+    return [
+        claim
+        for _, claim in sorted(
+            indexed_claims,
+            key=lambda item: (
+                _investment_meeting_claim_priority(item[1], source_lookup=source_lookup),
+                item[0],
+            ),
+        )
     ]
 
 
@@ -332,6 +447,68 @@ def _conservative_evidence_limitations(
     return lines
 
 
+def _investment_meeting_evidence_limitations(
+    *,
+    evidence_ledger: EvidenceLedgerModel,
+    cited_claims: list[EvidenceClaim],
+    source_map: SourceMap,
+) -> list[str]:
+    source_count = len(_source_ids_for_claims(cited_claims))
+    lines = [
+        (
+            f"This report uses {len(cited_claims)} evidence claims "
+            f"from {source_count} cited source IDs."
+        ),
+        (
+            "This is not a complete investment memo: consensus estimates, valuation "
+            "data, peer comparison, and independent industry research require "
+            "additional sourced inputs."
+        ),
+        (
+            "Treat management comments, backlog visibility, and margin targets as "
+            "company-reported assertions to test in the meeting, not independent "
+            "validation."
+        ),
+    ]
+    gap_lines = [
+        gap
+        for gap in source_map.gaps
+        if any(marker in gap.lower() for marker in ("consensus", "valuation", "peer"))
+    ]
+    lines.extend(gap_lines[:3])
+    if not evidence_ledger.claims:
+        lines.append("No evidence claims were available for this run.")
+    return lines
+
+
+def _has_current_results_claim(claims: list[EvidenceClaim]) -> bool:
+    for claim in claims:
+        claim_text = f"{claim.claim} {claim.report_section}".lower()
+        if (
+            (_YEAR_RE.search(claim_text) or _PERIOD_SIGNAL_RE.search(claim_text))
+            and any(marker in claim_text for marker in ("adjusted ebitda", "revenue", "results"))
+        ):
+            return True
+    return False
+
+
+def _filter_resolved_investment_gaps(
+    open_questions: list[str],
+    *,
+    cited_claims: list[EvidenceClaim],
+) -> list[str]:
+    if not _has_current_results_claim(cited_claims):
+        return open_questions
+    return [
+        question
+        for question in open_questions
+        if not (
+            "latest quarter" in question.lower()
+            and "once located" in question.lower()
+        )
+    ]
+
+
 def _create_conservative_report(
     *,
     charter: ResearchCharter,
@@ -347,11 +524,16 @@ def _create_conservative_report(
         evidence_ledger=evidence_ledger,
         source_map=source_map,
     )
-    conservative_claims = _conservative_report_claims(
-        evidence_ledger,
-        source_map=source_map,
+    is_investment_meeting = _is_investment_meeting_context(charter)
+    conservative_claims = (
+        _investment_meeting_report_claims(evidence_ledger, source_map=source_map)
+        if is_investment_meeting
+        else _conservative_report_claims(
+            evidence_ledger,
+            source_map=source_map,
+        )
     )
-    direct_claims = conservative_claims[:6]
+    direct_claims = conservative_claims[:8] if is_investment_meeting else conservative_claims[:6]
     first_claims = direct_claims[:3]
     supplier_claims = _supplier_claims(conservative_claims)[:3]
     angle_claims = supplier_claims or first_claims
@@ -371,11 +553,22 @@ def _create_conservative_report(
             *plan.data_gaps,
         ]
     )
+    if is_investment_meeting:
+        open_questions = _filter_resolved_investment_gaps(
+            open_questions,
+            cited_claims=cited_claims,
+        )
     evidence_limitations = _conservative_evidence_limitations(
         evidence_ledger=evidence_ledger,
         cited_claims=cited_claims,
         source_fetch_log=source_fetch_log,
     )
+    if is_investment_meeting:
+        evidence_limitations = _investment_meeting_evidence_limitations(
+            evidence_ledger=evidence_ledger,
+            cited_claims=cited_claims,
+            source_map=source_map,
+        )
     section_lines: dict[str, list[str]] = {
         "Executive Summary": [
             (
@@ -423,6 +616,66 @@ def _create_conservative_report(
         "Evidence Limitations": evidence_limitations,
         "Source Appendix": [],
     }
+    if is_investment_meeting:
+        section_lines = {
+            "Executive Summary": [
+                (
+                    "This is a filing-backed preliminary investment meeting brief, "
+                    "not a complete valuation or peer-comparison memo."
+                ),
+                (
+                    "Use only the cited company-reported facts below; treat "
+                    "management assertions and backlog comments as points to verify "
+                    "in the meeting."
+                ),
+                *[_claim_line(claim) for claim in first_claims],
+            ],
+            "Context for Meeting": [
+                (
+                    "The cited evidence supports company-reported operating "
+                    "metrics and selected risk questions."
+                ),
+                (
+                    "Consensus estimates, valuation data, peer comparison, and "
+                    "independent industry research remain outside the sourced record."
+                ),
+                (
+                    "Transcript commentary should be used only as directional "
+                    "meeting context unless backed by cited filing claims."
+                ),
+            ],
+            "What We Know": [_claim_line(claim) for claim in direct_claims]
+            or ["No directly supported investment facts were available."],
+            "What We Do Not Know": open_questions
+            or ["Consensus, valuation, peer context, and independent market checks are not sourced."],
+            "Supplier/Buyer Angle": [
+                (
+                    "Investment angle: anchor the discussion in cited operating "
+                    f"metrics and risk facts, not valuation conclusions. "
+                    f"{_claim_reference_text(first_claims)}"
+                ).strip(),
+                (
+                    "Treat backlog conversion, demand durability, margin expansion, "
+                    "cash conversion, and capital deployment as questions for "
+                    "management to validate."
+                ),
+            ],
+            "Questions to Ask": plan.checkpoint_questions
+            or [
+                "What does backlog conversion imply for the next four quarters?",
+                "Which margin levers are most controllable versus mix- or timing-driven?",
+                "What valuation or peer set should be used once market data is added?",
+            ],
+            "Risks and Watchouts": [
+                *[_claim_line(claim) for claim in direct_claims if "risk" in claim.report_section.lower()],
+                (
+                    "Do not use this brief for valuation, peer ranking, or momentum "
+                    "conclusions without additional sourced market data."
+                ),
+            ],
+            "Evidence Limitations": evidence_limitations,
+            "Source Appendix": [],
+        }
 
     title = f"# Meeting Prep Brief: {charter.target}"
     sections: list[str] = [title]

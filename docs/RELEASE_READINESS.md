@@ -1,6 +1,6 @@
 # V1 Release Readiness
 
-Status: V1 validation passed in this branch on 2026-06-01.
+Status: V1 validation passed in this branch on 2026-06-08.
 
 ## Checklist
 
@@ -16,19 +16,24 @@ Status: V1 validation passed in this branch on 2026-06-01.
 - Current/recent claims require dated direct evidence or an explicit caveat.
 - `arf review-run <run_id>` provides a compact operator summary and refreshes
   `artifact_review.md`.
+- Investment meeting fallback briefs remain source-grounded, caveated, and
+  separate from supplier meeting recommendations.
+- Continue-run QA receives saved user feedback as scope context.
+- Source-content payloads preserve multi-source coverage under character
+  limits and prioritize dated financial metrics without fixed-year rules.
 
 ## Required Validation
 
 ```text
 make doctor: passed
-make check: passed, 156 tests passed; Ruff passed; mypy passed
+make check: passed, 172 tests passed; Ruff passed; mypy passed
 make eval: passed, 10/10 fixtures
 make eval-regression: passed, 5/5 scenarios
-make smoke-mock: passed, run_20260601T142504Z_0d3e5333
+make smoke-mock: passed, run_20260608T182853Z_03e64c8e
 git diff --check: passed
 ```
 
-Mock smoke artifact inspection for `run_20260601T142504Z_0d3e5333`:
+Mock smoke artifact inspection for `run_20260608T182853Z_03e64c8e`:
 
 - `metadata.status`: `checkpoint_ready`
 - `metadata.run_type`: `checkpoint`

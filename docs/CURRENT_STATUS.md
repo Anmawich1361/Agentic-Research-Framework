@@ -2,6 +2,35 @@
 
 This note records successive stabilization points for the CLI-first framework.
 
+## 2026-06-08 Ready-to-Use PR Pass
+
+This pass keeps the V1 roadmap complete and adds a final readiness hardening
+slice for practical operator use:
+
+- Conservative fallback reports now distinguish investment meeting briefs from
+  supplier meeting briefs while preserving the existing QA/publication gates.
+- Investment meeting fallback output prioritizes dated operating and financial
+  metrics without hard-coding a calendar year.
+- `continue_research` passes saved user feedback into QA so the QA agent can
+  judge scope completeness against user-approved sources, notes, and priority
+  topics.
+- Source-content payload shaping now preserves coverage across later sources
+  under character limits instead of allowing an early long source to crowd out
+  current releases or transcripts.
+- Source chunk ranking is tuned to prefer current financial metrics over
+  boilerplate financial-measure definitions without hard-coding a fiscal year.
+
+Validation for this pass:
+
+- `make doctor`: passed.
+- `make check`: passed with 172 tests; Ruff passed; mypy passed.
+- `make eval`: passed with 10/10 fixtures.
+- `make eval-regression`: passed with 5/5 workflow scenarios.
+- `make smoke-mock`: passed and wrote
+  `runs/run_20260608T182853Z_03e64c8e` with `metadata.status =
+  checkpoint_ready`.
+- `git diff --check`: passed.
+
 ## 2026-06-01 Long-Running Goal Documentation Pass
 
 The V1 roadmap milestones remain complete. This pass fixed the repo guidance

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from agentic_research.models import (
@@ -14,6 +14,9 @@ from agentic_research.models import (
     SourceMap,
 )
 from agentic_research.tools.web_search import SearchResult
+
+
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 
 
 def _source_map_with_fetched_urls(
@@ -164,21 +167,34 @@ def _source_content_payload(
     max_chunks_per_source: int = 5,
     max_chunk_chars: int = 1200,
 ) -> list[dict[str, Any]]:
-    payload: list[dict[str, Any]] = []
+    payload: list[dict[str, Any]] = [
+        {
+            "source_id": content.source_id,
+            "url": content.url,
+            "content_type": content.content_type,
+            "title": content.title,
+            "excerpt": content.excerpt,
+            "chunks": [],
+        }
+        for content in source_content
+    ]
+    selected_chunks = [
+        _select_source_chunks(content.chunks, max_chunks=max_chunks_per_source)
+        for content in source_content
+    ]
     remaining_chars = max_total_chars
-    for content in source_content:
+    for chunk_index in range(max_chunks_per_source):
         if remaining_chars <= 0:
             break
-        chunks: list[dict[str, Any]] = []
-        for chunk in _select_source_chunks(
-            content.chunks,
-            max_chunks=max_chunks_per_source,
-        ):
+        for payload_item, chunks in zip(payload, selected_chunks):
             if remaining_chars <= 0:
                 break
+            if chunk_index >= len(chunks):
+                continue
+            chunk = chunks[chunk_index]
             text = chunk.text[: min(max_chunk_chars, remaining_chars)]
             remaining_chars -= len(text)
-            chunks.append(
+            cast(list[dict[str, Any]], payload_item["chunks"]).append(
                 {
                     "source_id": chunk.source_id,
                     "url": chunk.url,
@@ -187,17 +203,7 @@ def _source_content_payload(
                     "text": text,
                 }
             )
-        payload.append(
-            {
-                "source_id": content.source_id,
-                "url": content.url,
-                "content_type": content.content_type,
-                "title": content.title,
-                "excerpt": content.excerpt,
-                "chunks": chunks,
-            }
-        )
-    return payload
+    return [item for item in payload if item["chunks"]]
 
 
 def _valid_http_url(url: str) -> bool:
@@ -318,23 +324,64 @@ def _source_chunk_signal_score(text: str) -> float:
     score = word_count * (alpha_count / char_count)
 
     for marker in (
+        "adjusted ebitda",
+        "adjusted revenues",
+        "backlog",
         "business",
+        "cash flow",
         "earnings",
+        "fourth quarter",
+        "free cash flow",
+        "guidance",
         "member",
         "membership",
         "merchandise",
         "net sales",
+        "order bookings",
+        "order backlog",
+        "outlook",
+        "q4",
         "risk",
         "sales",
         "supplier",
         "warehouse",
+        "working capital",
     ):
         if marker in lowered:
             score += 25
 
+    if _YEAR_RE.search(lowered) and any(
+        marker in lowered
+        for marker in (
+            "adjusted ebitda",
+            "backlog",
+            "cash flow",
+            "guidance",
+            "order bookings",
+            "revenue",
+            "working capital",
+        )
+    ):
+        score += 45
+
+    if "$" in text and any(
+        marker in lowered
+        for marker in (
+            "adjusted ebitda",
+            "adjusted revenue",
+            "backlog",
+            "cash flow",
+            "order bookings",
+            "revenue",
+        )
+    ):
+        score += 80
+
     score -= 40 * lowered.count("us-gaap")
     score -= 40 * lowered.count("fasb.org")
     score -= 10 * lowered.count("0000909832")
+    if "the terms" in lowered and "non-ifrs financial measures" in lowered:
+        score -= 90
     score -= 20 * (digit_count / char_count)
     return score
 
