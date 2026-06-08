@@ -45,17 +45,45 @@ def _plan() -> ResearchPlan:
     )
 
 
+def _investment_charter() -> ResearchCharter:
+    return ResearchCharter(
+        target="ATS Corporation",
+        target_type="company",
+        research_lens="investment",
+        depth="standard",
+        deliverable="investment_meeting_brief",
+        key_questions=["Should we invest after the latest earnings release?"],
+    )
+
+
+def _investment_plan() -> ResearchPlan:
+    return ResearchPlan(
+        research_questions=["What changed in the most recent quarterly results?"],
+        report_sections=["overview", "latest_results", "valuation", "peers"],
+        required_source_types=[
+            "Management discussion & analysis (MD&A) and earnings release/transcript",
+            "market data / valuation screens / trading history",
+            "peer company source set",
+            "industry primer",
+        ],
+        checkpoint_questions=["Which valuation lens should be prioritized?"],
+    )
+
+
 def test_build_source_search_queries_targets_required_source_types() -> None:
     queries = build_source_search_queries(_charter(), _plan())
 
-    assert queries == [
-        "Costco SEC 10-K annual report site:sec.gov supplier meeting",
-        "Costco official company source supplier meeting",
-        "Costco investor relations investor presentation supplier meeting",
-        "Costco earnings release earnings transcript supplier meeting",
-        "Costco official company primary source supplier meeting",
-        "Costco recent news supplier meeting",
-    ]
+    assert "Costco SEC 10-K annual report site:sec.gov" in queries
+    assert "Costco SEC 6-K earnings results site:sec.gov" in queries
+    assert "Costco official company source" in queries
+    assert "Costco investor relations financial results" in queries
+    assert "Costco investor relations investor presentation" in queries
+    assert "Costco earnings release" in queries
+    assert "Costco quarterly results" in queries
+    assert "Costco latest results press release" in queries
+    assert "Costco earnings transcript" in queries
+    assert "Costco official company primary source" in queries
+    assert "Costco recent news" in queries
 
 
 def test_build_source_search_queries_prefers_accessible_sec_filings_for_company() -> None:
@@ -65,6 +93,25 @@ def test_build_source_search_queries_prefers_accessible_sec_filings_for_company(
     assert "site:sec.gov" in queries[0]
 
 
+def test_build_source_search_queries_uses_simple_date_aware_investment_queries() -> None:
+    queries = build_source_search_queries(
+        _investment_charter(),
+        _investment_plan(),
+        feedback_text="Earnings were just reported May 28 2026.",
+    )
+
+    assert "ATS Corporation earnings release" in queries
+    assert "ATS Corporation quarterly results" in queries
+    assert "ATS Corporation investor relations financial results" in queries
+    assert "ATS Corporation latest results press release" in queries
+    assert "ATS Corporation May 28 2026 earnings release" in queries
+    assert "ATS Corporation May 28 2026 quarterly results" in queries
+    assert "ATS Corporation market data valuation" in queries
+    assert "ATS Corporation peers competitors valuation" in queries
+    assert "ATS Corporation industry primer" in queries
+    assert not any("Management discussion" in query for query in queries)
+
+
 def test_web_search_client_dedupes_mocked_search_results(mocker: Any) -> None:
     mocker.patch(
         "agentic_research.tools.web_search._sec_filing_fallback_results",
@@ -72,7 +119,7 @@ def test_web_search_client_dedupes_mocked_search_results(mocker: Any) -> None:
     )
     provider = StaticSearchProvider(
         {
-            "Costco official company primary source supplier meeting": [
+            "Costco official company primary source": [
                 SearchResult(
                     title="Costco supplier information",
                     publisher="Costco",
@@ -81,7 +128,7 @@ def test_web_search_client_dedupes_mocked_search_results(mocker: Any) -> None:
                     publication_date="2026-01-10",
                 ),
             ],
-            "Costco recent news supplier meeting": [
+            "Costco recent news": [
                 SearchResult(
                     title="Costco supplier information",
                     publisher="Costco",
@@ -145,9 +192,9 @@ def test_web_search_client_records_query_failure_diagnostics(mocker: Any) -> Non
 
     client.search_many(build_source_search_queries(_charter(), _plan()))
 
-    assert len(client.last_failures) == 1
+    assert len(client.last_failures) == 2
     assert client.last_failures[0].query == (
-        "Costco SEC 10-K annual report site:sec.gov supplier meeting"
+        "Costco SEC 10-K annual report site:sec.gov"
     )
     assert client.last_failures[0].error_type == "TimeoutError"
     assert client.last_failures[0].error == "search timeout"
@@ -174,6 +221,99 @@ def test_web_search_client_uses_sec_filing_fallback_for_sec_queries(mocker: Any)
     results = client.search("Costco SEC 10-K annual report site:sec.gov supplier meeting")
 
     assert results == [fallback]
+
+
+def test_web_search_client_uses_recent_sec_filing_fallback_for_6k_earnings_exhibit(
+    mocker: Any,
+) -> None:
+    def fake_sec_json_get(url: str, *, timeout_seconds: float = 10) -> Any:
+        del timeout_seconds
+        if url.endswith("/company_tickers.json"):
+            return {
+                "0": {
+                    "cik_str": 1394832,
+                    "ticker": "ATS",
+                    "title": "ATS CORP",
+                }
+            }
+        if url.endswith("/CIK0001394832.json"):
+            return {
+                "filings": {
+                    "recent": {
+                        "form": ["6-K", "10-K"],
+                        "accessionNumber": [
+                            "0001394832-26-000017",
+                            "0001394832-25-000010",
+                        ],
+                        "primaryDocument": ["ats-6k.htm", "ats-20250331.htm"],
+                    }
+                }
+            }
+        if url.endswith("/000139483226000017/index.json"):
+            return {
+                "directory": {
+                    "item": [
+                        {"name": "ats-6k.htm"},
+                        {"name": "ats-pressreleasexfy26q4.htm"},
+                    ]
+                }
+            }
+        raise AssertionError(f"Unexpected SEC JSON URL: {url}")
+
+    mocker.patch("agentic_research.tools.web_search._sec_json_get", fake_sec_json_get)
+    client = WebSearchClient(provider=StaticSearchProvider({}))
+
+    results = client.search("ATS Corporation SEC 6-K earnings results site:sec.gov")
+
+    assert [result.url for result in results] == [
+        "https://www.sec.gov/Archives/edgar/data/1394832/"
+        "000139483226000017/ats-pressreleasexfy26q4.htm"
+    ]
+    assert results[0].publisher == "U.S. Securities and Exchange Commission"
+    assert "Form 6-K" in results[0].title
+
+
+def test_web_search_client_adds_sec_fallback_even_when_provider_returns_results(
+    mocker: Any,
+) -> None:
+    fallback = SearchResult(
+        title="ATS Corp /ATS latest Form 6-K",
+        publisher="U.S. Securities and Exchange Commission",
+        url=(
+            "https://www.sec.gov/Archives/edgar/data/1394832/"
+            "000139483226000017/ats-pressreleasexfy26q4.htm"
+        ),
+        snippet="Direct SEC Form 6-K filing URL for ATS Corp /ATS.",
+    )
+    provider_result = SearchResult(
+        title="ATS Corp /ATS latest Form 6-K",
+        publisher="U.S. Securities and Exchange Commission",
+        url=(
+            "https://www.sec.gov/Archives/edgar/data/1394832/"
+            "000162828026008830/a2026-2x17xraymondjamesins.htm"
+        ),
+        snippet="Direct SEC Form 6-K filing URL for ATS Corp /ATS.",
+    )
+    mocker.patch(
+        "agentic_research.tools.web_search._sec_filing_fallback_results",
+        return_value=[fallback],
+    )
+    client = WebSearchClient(
+        provider=StaticSearchProvider(
+            {
+                "ATS Corporation SEC 6-K earnings results site:sec.gov": [
+                    provider_result
+                ]
+            }
+        )
+    )
+
+    results = client.search("ATS Corporation SEC 6-K earnings results site:sec.gov")
+
+    assert [result.url for result in results] == [
+        fallback.url,
+        provider_result.url,
+    ]
 
 
 def test_create_web_search_tool_is_agent_compatible() -> None:

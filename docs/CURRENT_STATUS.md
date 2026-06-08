@@ -23,11 +23,11 @@ slice for practical operator use:
 Validation for this pass:
 
 - `make doctor`: passed.
-- `make check`: passed with 172 tests; Ruff passed; mypy passed.
+- `make check`: passed with 180 tests; Ruff passed; mypy passed.
 - `make eval`: passed with 10/10 fixtures.
 - `make eval-regression`: passed with 5/5 workflow scenarios.
 - `make smoke-mock`: passed and wrote
-  `runs/run_20260608T182853Z_03e64c8e` with `metadata.status =
+  `runs/run_20260608T183841Z_1a1a8ade` with `metadata.status =
   checkpoint_ready`.
 - `git diff --check`: passed.
 

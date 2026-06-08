@@ -92,6 +92,19 @@ def test_build_artifact_review_summarizes_run_quality(tmp_path: Path) -> None:
             ]
         },
     )
+    _write_json(
+        run_dir / "source_discovery_review.json",
+        {
+            "query_count": 7,
+            "raw_result_count": 4,
+            "selected_source_count": 2,
+            "repair_added_source_ids": ["repair_earnings_release_1"],
+            "unresolved_gaps": ["Missing source type: market_data"],
+            "coverage_gaps": [
+                "Investment brief missing fetched market/valuation source."
+            ],
+        },
+    )
     (run_dir / "draft_report.md").write_text("# Draft", encoding="utf-8")
 
     review = build_artifact_review(run_dir)
@@ -104,13 +117,29 @@ def test_build_artifact_review_summarizes_run_quality(tmp_path: Path) -> None:
     assert review.qa_high_count == 1
     assert review.source_fetch_fetched_count == 1
     assert review.source_fetch_failed_count == 1
+    assert review.source_discovery_query_count == 7
+    assert review.source_discovery_raw_result_count == 4
+    assert review.source_discovery_repair_added_count == 1
+    assert review.source_discovery_unresolved_gap_count == 1
+    assert review.source_discovery_coverage_gap_count == 1
     assert review.publication_state == "qa_blocked"
     assert any("QA blocked publication" in warning for warning in review.blocking_warnings)
     assert any("1 failed source fetch" in warning for warning in review.blocking_warnings)
+    assert any(
+        "Source discovery has 1 unresolved source gap" in warning
+        for warning in review.blocking_warnings
+    )
+    assert any(
+        "Source coverage has 1 blocking coverage gap" in warning
+        for warning in review.blocking_warnings
+    )
     assert review.final_report_published is False
     assert "Final report published: no" in markdown
     assert "Publication state: qa_blocked" in markdown
     assert "Source fetches: 1 fetched, 0 fallback, 1 failed, 0 skipped" in markdown
+    assert "Source discovery queries: 7" in markdown
+    assert "Repair-added sources: 1" in markdown
+    assert "Coverage gaps: 1" in markdown
     assert "Fix high-severity QA blockers before publishing the final report." in markdown
 
 

@@ -22,6 +22,11 @@ Checkpoint runs write:
 - `sources.json`: source candidates discovered by mock or live source discovery.
 - `source_map.json`: scored source map with source scores, included sources,
   gaps, and notes.
+- `source_discovery_review.json`: live source-search diagnostics, including
+  queries, raw results, selected sources, repair-added sources, unresolved
+  source gaps, fetch status counts when available, and investment coverage gaps
+  when applicable. Mock runs may omit this because they do not perform live
+  discovery.
 - `checkpoint.md`: user-facing checkpoint summary for approval or steering.
 - `run_log.jsonl`: structured event log for stages, tools, agent calls,
   artifacts, and errors.
@@ -89,8 +94,11 @@ not support high-confidence claims.
 - `artifact_review.md`: generated when evidence, report, or QA artifacts are
   present, and can be refreshed with `arf review-run <run_id>`. The CLI also
   prints the same high-level operator summary: status, publication state,
-  final-report state, QA severity counts, source-fetch counts, blocking
-  warnings, and next action.
+  final-report state, QA severity counts, source-fetch counts, source-discovery
+  counts, blocking warnings, and next action.
+- `source_discovery_review.json`: review this before trusting a current-event
+  run. It should show whether direct earnings, filing, market-data, and peer
+  sources were found or whether gaps remain.
 - `evidence_review.md`: written when evidence validation has blocking warnings
   and synthesis/QA do not run.
 - `report_revision.md`: written when deterministic pre-QA report validation

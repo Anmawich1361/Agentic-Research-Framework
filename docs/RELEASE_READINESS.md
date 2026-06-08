@@ -26,14 +26,14 @@ Status: V1 validation passed in this branch on 2026-06-08.
 
 ```text
 make doctor: passed
-make check: passed, 172 tests passed; Ruff passed; mypy passed
+make check: passed, 180 tests passed; Ruff passed; mypy passed
 make eval: passed, 10/10 fixtures
 make eval-regression: passed, 5/5 scenarios
-make smoke-mock: passed, run_20260608T182853Z_03e64c8e
+make smoke-mock: passed, run_20260608T183841Z_1a1a8ade
 git diff --check: passed
 ```
 
-Mock smoke artifact inspection for `run_20260608T182853Z_03e64c8e`:
+Mock smoke artifact inspection for `run_20260608T183841Z_1a1a8ade`:
 
 - `metadata.status`: `checkpoint_ready`
 - `metadata.run_type`: `checkpoint`

@@ -44,6 +44,7 @@ class ResearchRunResult(BaseModel):
     source_map: SourceMap
     source_content: list[SourceContent] = Field(default_factory=list)
     source_fetch_log: SourceFetchLog | None = None
+    source_discovery_review: dict[str, Any] | None = None
     user_feedback: UserFeedback | None = None
     specialist_analyses: list[SpecialistAnalysis] = Field(default_factory=list)
     evidence_ledger: EvidenceLedgerModel | None = None
@@ -181,6 +182,7 @@ def write_checkpoint_artifacts(
     source_map: SourceMap,
     source_content: list[SourceContent] | None = None,
     source_fetch_log: SourceFetchLog | None = None,
+    source_discovery_review: dict[str, Any] | None = None,
     user_feedback: UserFeedback | None = None,
     specialist_analyses: list[SpecialistAnalysis] | None = None,
     evidence_ledger: EvidenceLedgerModel | None = None,
@@ -217,6 +219,12 @@ def write_checkpoint_artifacts(
     write_logged_json_artifact(run_dir / "research_plan.json", plan, run_logger)
     write_logged_json_artifact(run_dir / "sources.json", sources, run_logger)
     write_logged_json_artifact(run_dir / "source_map.json", source_map, run_logger)
+    if source_discovery_review is not None:
+        write_logged_json_artifact(
+            run_dir / "source_discovery_review.json",
+            source_discovery_review,
+            run_logger,
+        )
     if source_content is not None:
         write_logged_json_artifact(run_dir / "source_content.json", source_content, run_logger)
     if source_fetch_log is not None:
@@ -278,6 +286,7 @@ def write_checkpoint_artifacts(
         source_map=source_map,
         source_content=source_content or [],
         source_fetch_log=source_fetch_log,
+        source_discovery_review=source_discovery_review,
         user_feedback=user_feedback,
         specialist_analyses=specialist_analyses or [],
         evidence_ledger=evidence_ledger,

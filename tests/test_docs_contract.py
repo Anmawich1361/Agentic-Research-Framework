@@ -28,6 +28,7 @@ def test_artifact_contract_documents_expected_run_artifacts() -> None:
         "research_plan.json",
         "sources.json",
         "source_map.json",
+        "source_discovery_review.json",
         "checkpoint.md",
         "user_feedback.json",
         "source_content.json",
