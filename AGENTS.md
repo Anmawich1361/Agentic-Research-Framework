@@ -64,7 +64,6 @@ against current `origin/main` when branch ancestry is the real issue.
 - Preserve `--mock` mode throughout the project.
 - Save run artifacts under `runs/<run_id>/`.
 - Every material factual claim in a report must map to an evidence ledger entry.
-- Prefer small, reviewable changes.
 - Do not silently remove files or prompts unless explicitly asked.
 - Use type hints where practical.
 - Avoid over-engineering early phases.

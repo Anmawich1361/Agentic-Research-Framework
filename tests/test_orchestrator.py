@@ -1339,6 +1339,119 @@ def test_continue_includes_user_feedback_and_excludes_rejected_sources(
     assert [source["id"] for source in source_map["sources"]] == ["src_keep"]
 
 
+def test_continue_qa_prompt_includes_user_feedback(tmp_path: Path) -> None:
+    def fake_checkpoint_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "intake":
+            return ResearchCharter(
+                target="Costco",
+                target_type="company",
+                research_lens="sales",
+                depth="brief",
+                deliverable="meeting_prep_brief",
+                key_questions=["What should suppliers know?"],
+            )
+        if agent_key == "planner":
+            return ResearchPlan(
+                research_questions=["What should suppliers understand?"],
+                report_sections=["overview"],
+                required_source_types=["primary_company"],
+                checkpoint_questions=["Which supplier category matters?"],
+            )
+        if agent_key == "source_discovery":
+            return SourceDiscoveryResult(
+                sources=[
+                    SourceCandidate(
+                        id="src_keep",
+                        title="Costco supplier page",
+                        publisher="Costco",
+                        url="https://example.com/keep",
+                        source_type="primary_company",
+                        bias_risk="medium",
+                        relevance_rationale="Supplier context.",
+                        recommended_uses=["supplier meeting"],
+                    )
+                ]
+            )
+        raise AssertionError(f"Unexpected checkpoint agent call: {agent_key}")
+
+    checkpoint = run_research(
+        "Research Costco before a supplier meeting",
+        checkpoint_only=True,
+        mock=False,
+        runs_dir=tmp_path,
+        agent_runner=fake_checkpoint_agent_runner,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+    save_user_feedback(
+        checkpoint.run_dir,
+        UserFeedback(
+            approved_source_ids=["src_keep"],
+            user_notes="Treat this as a narrow preliminary brief only.",
+            priority_topics=["cash conversion"],
+        ),
+    )
+
+    def fake_continue_agent_runner(agent_key: str, agent: Any, prompt: str) -> Any:
+        if agent_key == "evidence_extraction":
+            return EvidenceExtractionResult(
+                claims=[
+                    EvidenceClaim(
+                        id="claim_keep",
+                        claim="Costco publishes supplier contact information.",
+                        claim_type="fact",
+                        source_id="src_keep",
+                        source_url="https://example.com/keep",
+                        confidence="medium",
+                        report_section="what_we_know",
+                        quote_or_excerpt="Supplier Contact",
+                    )
+                ]
+            )
+        if agent_key in {"news", "competitor", "risk"}:
+            return SpecialistAnalysis(
+                specialist=agent_key,
+                summary="Source-bound analysis.",
+                source_ids=["src_keep"],
+            )
+        if agent_key == "synthesis":
+            return Report(
+                title="Costco Supplier Meeting Prep",
+                markdown=(
+                    "# Costco Supplier Meeting Prep\n\n"
+                    "## Executive Summary\nEvidence-backed summary. [claim_keep]\n\n"
+                    "## Context for Meeting\nContext.\n\n"
+                    "## What We Know\n- Costco publishes supplier contact information. "
+                    "[claim_keep]\n\n"
+                    "## What We Do Not Know\n- Category-specific requirements.\n\n"
+                    "## Supplier/Buyer Angle\nCaveated angle.\n\n"
+                    "## Questions to Ask\n- Which supplier category matters?\n\n"
+                    "## Risks and Watchouts\n- User context is narrow.\n\n"
+                    "## Evidence Limitations\nOnly one approved source supports this brief.\n\n"
+                    "## Source Appendix\n- Costco supplier page (src_keep)\n"
+                ),
+                source_ids=["src_keep"],
+                claim_ids=["claim_keep"],
+            )
+        if agent_key == "qa":
+            assert "user_feedback" in prompt
+            assert "narrow preliminary brief" in prompt
+            assert "cash conversion" in prompt
+            return QAReview(ready_to_publish=True, issues=[])
+        raise AssertionError(f"Unexpected continue agent call: {agent_key}")
+
+    result = continue_research(
+        checkpoint.metadata.run_id,
+        qa=True,
+        runs_dir=tmp_path,
+        mock=False,
+        agent_runner=fake_continue_agent_runner,
+        source_fetcher=_fetcher_with_supplier_content,
+        search_client=WebSearchClient(provider=StaticSearchProvider({})),
+    )
+
+    assert result.metadata.status == "report_ready"
+
+
 def test_live_continue_repairs_source_map_from_feedback_before_ingestion(
     tmp_path: Path,
 ) -> None:

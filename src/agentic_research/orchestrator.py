@@ -581,6 +581,7 @@ def _run_qa_with_conservative_revision(
     report: Report,
     agent_runner: AgentRunner | None,
     source_fetch_log: SourceFetchLog | None,
+    feedback: UserFeedback | None = None,
     run_logger: RunLogger | None = None,
 ) -> tuple[Report, QAReview]:
     qa_review = _run_qa_review(
@@ -590,6 +591,7 @@ def _run_qa_with_conservative_revision(
         evidence_ledger=evidence_ledger,
         report=report,
         agent_runner=agent_runner,
+        feedback=feedback,
         run_logger=run_logger,
     )
     if not has_high_severity_issues(qa_review):
@@ -628,6 +630,7 @@ def _run_qa_with_conservative_revision(
         evidence_ledger=evidence_ledger,
         report=conservative_report,
         agent_runner=agent_runner,
+        feedback=feedback,
         run_logger=run_logger,
     )
     if has_high_severity_issues(conservative_qa_review):
@@ -739,6 +742,7 @@ def _run_synthesis_and_qa(
                 report=report,
                 agent_runner=agent_runner,
                 source_fetch_log=source_fetch_log,
+                feedback=feedback,
                 run_logger=run_logger,
             )
             run_logger.stage_end("qa")
@@ -807,6 +811,7 @@ def _run_qa_review(
     evidence_ledger: EvidenceLedgerModel,
     report: Report,
     agent_runner: AgentRunner | None,
+    feedback: UserFeedback | None = None,
     run_logger: RunLogger | None = None,
 ) -> QAReview:
     template_name = select_report_template_name(charter)
@@ -816,23 +821,36 @@ def _run_qa_review(
         draft_report=report,
         template_name=template_name,
     )
-    qa_payload = {
+    instructions = [
+        "Review the draft report for reliability, source quality, and usefulness.",
+        "Do not rewrite the report.",
+        "High-severity issues should block final publication.",
+        "Do not treat Quartr pages, source-finding aids, or source-map rationales "
+        "as strategic evidence.",
+        "Block recent-development claims that lack concrete source-content support.",
+        "Flag supplier-meeting recommendations that lack direct claim IDs or "
+        "explicit caveats.",
+    ]
+    qa_payload: dict[str, Any] = {
         "research_charter": charter.model_dump(mode="json"),
         "source_map": source_map.model_dump(mode="json"),
         "evidence_ledger": evidence_ledger.model_dump(mode="json"),
         "draft_report": report.model_dump(mode="json"),
-        "instructions": [
-            "Review the draft report for reliability, source quality, and usefulness.",
-            "Do not rewrite the report.",
-            "High-severity issues should block final publication.",
-            "Do not treat Quartr pages, source-finding aids, or source-map rationales "
-            "as strategic evidence.",
-            "Block recent-development claims that lack concrete source-content support.",
-            "Flag supplier-meeting recommendations that lack direct claim IDs or "
-            "explicit caveats.",
-        ],
+        "instructions": instructions,
         "output_schema": "QAReview",
     }
+    if feedback is not None:
+        qa_payload["user_feedback"] = _user_feedback_prompt_payload(feedback)
+        instructions.extend(
+            [
+                "Evaluate scope completeness in light of user_feedback.",
+                "If user_feedback explicitly narrows the deliverable or marks a "
+                "topic as unsupported/missing, do not raise a high-severity issue "
+                "solely because the original charter requested that topic.",
+                "Treat user_feedback as user scope and preference context, not as "
+                "factual evidence.",
+            ]
+        )
     agent_review = cast(
         QAReview,
         _run_live_agent(
